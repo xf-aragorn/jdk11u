@@ -40,6 +40,7 @@ class ShenandoahMarkRefsSuperClosure : public MetadataVisitingOopIterateClosure 
 private:
   ShenandoahObjToScanQueue* _queue;
   ShenandoahHeap* _heap;
+  ShenandoahMarkingContext* const _mark_context;
 
 protected:
   template <class T, UpdateRefsMode UPDATE_MODE, bool STRING_DEDUP>
@@ -226,15 +227,19 @@ public:
 
 class ShenandoahTraversalSuperClosure : public MetadataVisitingOopIterateClosure {
 private:
-  ShenandoahTraversalGC* _traversal_gc;
-  Thread* _thread;
-  ShenandoahObjToScanQueue* _queue;
+  ShenandoahTraversalGC* const _traversal_gc;
+  Thread* const _thread;
+  ShenandoahObjToScanQueue* const _queue;
+  ShenandoahMarkingContext* const _mark_context;
   oop _base_obj;
 protected:
   ShenandoahTraversalSuperClosure(ShenandoahObjToScanQueue* q, ReferenceProcessor* rp) :
     MetadataVisitingOopIterateClosure(rp),
     _traversal_gc(ShenandoahHeap::heap()->traversal_gc()),
-    _thread(Thread::current()), _queue(q), _base_obj(NULL) {
+    _thread(Thread::current()),
+    _queue(q),
+    _mark_context(ShenandoahHeap::heap()->next_marking_context()),
+    _base_obj(NULL) {
   }
 
   template <class T, bool STRING_DEDUP, bool DEGEN, bool MATRIX>

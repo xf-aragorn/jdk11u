@@ -87,6 +87,7 @@ protected:
   double _last_cycle_end;
 
   static int compare_by_garbage(RegionData a, RegionData b);
+  static int compare_by_garbage_then_alloc_seq_ascending(RegionData a, RegionData b);
   static int compare_by_alloc_seq_ascending(RegionData a, RegionData b);
   static int compare_by_alloc_seq_descending(RegionData a, RegionData b);
   static int compare_by_connects(RegionConnections a, RegionConnections b);
@@ -116,7 +117,7 @@ public:
 
   virtual void print_thresholds();
 
-  virtual bool should_start_normal_gc() const = 0;
+  virtual bool should_start_normal_gc() const;
 
   virtual bool should_start_update_refs();
 

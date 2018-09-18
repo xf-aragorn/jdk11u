@@ -67,7 +67,7 @@ void ShenandoahPacer::setup_for_mark() {
 
   double tax = 1.0 * live / taxable; // base tax for available free space
   tax *= 3;                          // mark is phase 1 of 3, claim 1/3 of free for it
-  tax *= 1.1;                        // additional surcharge to help unclutter heap
+  tax *= ShenandoahPacingSurcharge;  // additional surcharge to help unclutter heap
 
   restart_with(non_taxable, tax);
 
@@ -96,11 +96,11 @@ void ShenandoahPacer::setup_for_evac() {
   double tax = 1.0 * used / taxable; // base tax for available free space
   tax *= 2;                          // evac is phase 2 of 3, claim 1/2 of remaining free
   tax = MAX2<double>(1, tax);        // never allocate more than GC processes during the phase
-  tax *= 1.1;                        // additional surcharge to help unclutter heap
+  tax *= ShenandoahPacingSurcharge;  // additional surcharge to help unclutter heap
 
   restart_with(non_taxable, tax);
 
-  log_info(gc, ergo)("Pacer for Evacuation. Used CSet: " SIZE_FORMAT "M, Free: " SIZE_FORMAT
+  log_info(gc, ergo)("Pacer for Evacuation. Used CSet: " SIZE_FORMAT "M, Avail: " SIZE_FORMAT
                      "M, Non-Taxable: " SIZE_FORMAT "M, Alloc Tax Rate: %.1fx",
                      used / M, free / M, non_taxable / M, tax);
 }
@@ -117,7 +117,7 @@ void ShenandoahPacer::setup_for_updaterefs() {
   double tax = 1.0 * used / taxable; // base tax for available free space
   tax *= 1;                          // update-refs is phase 3 of 3, claim the remaining free
   tax = MAX2<double>(1, tax);        // never allocate more than GC processes during the phase
-  tax *= 1.1;                        // additional surcharge to help unclutter heap
+  tax *= ShenandoahPacingSurcharge;  // additional surcharge to help unclutter heap
 
   restart_with(non_taxable, tax);
 
@@ -141,7 +141,7 @@ void ShenandoahPacer::setup_for_traversal() {
   size_t taxable = free - non_taxable;
 
   double tax = 1.0 * live / taxable; // base tax for available free space
-  tax *= 1.1;                        // additional surcharge to help unclutter heap
+  tax *= ShenandoahPacingSurcharge;  // additional surcharge to help unclutter heap
 
   restart_with(non_taxable, tax);
 
@@ -166,7 +166,7 @@ void ShenandoahPacer::setup_for_partial(size_t work_words) {
 
   double tax = 1.0 * work_bytes / taxable; // base tax for available free space
   tax = MAX2<double>(1, tax);              // never allocate more than GC collects during the cycle
-  tax *= 1.1;                              // additional surcharge to help unclutter heap
+  tax *= ShenandoahPacingSurcharge;        // additional surcharge to help unclutter heap
 
   restart_with(non_taxable, tax);
 
@@ -214,6 +214,7 @@ void ShenandoahPacer::restart_with(size_t non_taxable_bytes, double tax_rate) {
   STATIC_ASSERT(sizeof(size_t) <= sizeof(intptr_t));
   Atomic::xchg((intptr_t)initial, &_budget);
   Atomic::store(tax_rate, &_tax_rate);
+  Atomic::inc(&_epoch);
 }
 
 bool ShenandoahPacer::claim_for_alloc(size_t words, bool force) {
@@ -234,6 +235,22 @@ bool ShenandoahPacer::claim_for_alloc(size_t words, bool force) {
   return true;
 }
 
+void ShenandoahPacer::unpace_for_alloc(intptr_t epoch, size_t words) {
+  assert(ShenandoahPacing, "Only be here when pacing is enabled");
+
+  if (_epoch != epoch) {
+    // Stale ticket, no need to unpace.
+    return;
+  }
+
+  intptr_t tax = MAX2<intptr_t>(1, words * Atomic::load(&_tax_rate));
+  Atomic::add(tax, &_budget);
+}
+
+intptr_t ShenandoahPacer::epoch() {
+  return Atomic::load(&_epoch);
+}
+
 void ShenandoahPacer::pace_for_alloc(size_t words) {
   assert(ShenandoahPacing, "Only be here when pacing is enabled");
 
@@ -242,21 +259,33 @@ void ShenandoahPacer::pace_for_alloc(size_t words) {
     return;
   }
 
-  size_t max_wait_ms = ShenandoahPacingMaxDelay;
+  size_t max = ShenandoahPacingMaxDelay;
   double start = os::elapsedTime();
+
+  size_t total = 0;
+  size_t cur = 0;
 
   while (true) {
     // We could instead assist GC, but this would suffice for now.
     // This code should also participate in safepointing.
-    os::sleep(Thread::current(), 1, true);
+    // Perform the exponential backoff, limited by max.
+
+    cur = cur * 2;
+    if (total + cur > max) {
+      cur = (max > total) ? (max - total) : 0;
+    }
+    cur = MAX2<size_t>(1, cur);
+
+    os::sleep(Thread::current(), cur, true);
 
     double end = os::elapsedTime();
-    size_t ms = (size_t)((end - start) * 1000);
-    if (ms > max_wait_ms) {
+    total = (size_t)((end - start) * 1000);
+
+    if (total > max) {
       // Spent local time budget to wait for enough GC progress.
       // Breaking out and allocating anyway, which may mean we outpace GC,
       // and start Degenerated GC cycle.
-      _delays.add(ms);
+      _delays.add(total);
 
       // Forcefully claim the budget: it may go negative at this point, and
       // GC should replenish for this and subsequent allocations
@@ -266,7 +295,7 @@ void ShenandoahPacer::pace_for_alloc(size_t words) {
 
     if (claim_for_alloc(words, false)) {
       // Acquired enough permit, nice. Can allocate now.
-      _delays.add(ms);
+      _delays.add(total);
       break;
     }
   }
@@ -288,10 +317,20 @@ void ShenandoahPacer::print_on(outputStream* out) const {
   out->print_cr("Actual pacing delays histogram:");
   out->cr();
 
-  out->print_cr("%10s - %10s %12s", "From", "To", "Count");
+  out->print_cr("%10s - %10s  %12s%12s", "From", "To", "Count", "Sum");
+
+  size_t total_count = 0;
+  size_t total_sum = 0;
   for (int c = _delays.min_level(); c <= _delays.max_level(); c++) {
-    out->print("%7d ms - %7d ms:", (c == 0) ? 0 : 1 << (c - 1), 1 << c);
-    out->print_cr(SIZE_FORMAT_W(12), _delays.level(c));
+    int l = (c == 0) ? 0 : 1 << (c - 1);
+    int r = 1 << c;
+    size_t count = _delays.level(c);
+    size_t sum   = count * (r - l) / 2;
+    total_count += count;
+    total_sum   += sum;
+
+    out->print_cr("%7d ms - %7d ms: " SIZE_FORMAT_W(12) SIZE_FORMAT_W(12) " ms", l, r, count, sum);
   }
+  out->print_cr("%23s: " SIZE_FORMAT_W(12) SIZE_FORMAT_W(12) " ms", "Total", total_count, total_sum);
   out->cr();
 }

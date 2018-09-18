@@ -24,20 +24,21 @@
 #include "precompiled.hpp"
 #include "gc/shenandoah/heuristics/shenandoahTraversalHeuristics.hpp"
 #include "gc/shenandoah/shenandoahFreeSet.hpp"
+#include "gc/shenandoah/shenandoahHeuristics.hpp"
 #include "gc/shenandoah/shenandoahTraversalGC.hpp"
+#include "utilities/quickSort.hpp"
 
 ShenandoahTraversalHeuristics::ShenandoahTraversalHeuristics() : ShenandoahHeuristics(),
   _free_threshold(ShenandoahInitFreeThreshold),
-  _peak_occupancy(0)
+  _peak_occupancy(0),
+  _last_cset_select(0)
  {
   FLAG_SET_DEFAULT(UseShenandoahMatrix,              false);
   FLAG_SET_DEFAULT(ShenandoahSATBBarrier,            false);
   FLAG_SET_DEFAULT(ShenandoahStoreValReadBarrier,    false);
   FLAG_SET_DEFAULT(ShenandoahStoreValEnqueueBarrier, true);
   FLAG_SET_DEFAULT(ShenandoahKeepAliveBarrier,       false);
-  FLAG_SET_DEFAULT(ShenandoahBarriersForConst,       true);
   FLAG_SET_DEFAULT(ShenandoahWriteBarrierRB,         false);
-  FLAG_SET_DEFAULT(ShenandoahAllocImplicitLive,      false);
   FLAG_SET_DEFAULT(ShenandoahAllowMixedAllocs,       false);
   FLAG_SET_DEFAULT(ShenandoahRecycleClearsBitmap,    true);
 
@@ -48,6 +49,28 @@ ShenandoahTraversalHeuristics::ShenandoahTraversalHeuristics() : ShenandoahHeuri
     SHENANDOAH_ERGO_OVERRIDE_DEFAULT(ShenandoahUnloadClassesFrequency, 1);
   }
 
+  // Workaround the bug in degen-traversal that evac assists expose.
+  //
+  // During traversal cycle, we can evacuate some object from region R1 (CS) to R2 (R).
+  // Then degen-traversal happens, drops the cset, and finishes up the fixups.
+  // Then next cycle happens to put both R1 and R2 into CS, and then R2 evacuates to R3.
+  // It creates the double forwarding for that object: R1 (CS) -> R2 (CS) -> R3 (R).
+  //
+  // It is likely at that point that no references to R1 copy are left after the degen,
+  // so this double forwarding is not exposed. *Unless* we have evac assists, that touch
+  // the adjacent objects while evacuating live objects from R1, step on "bad" R1 copy,
+  // and fail the internal asserts when getting oop sizes to walk the heap, or touching
+  // its fwdptrs. The same thing would probably happen if we do size-based iteration
+  // somewhere else.
+  //
+  // AllocHumongousFragment test exposes it nicely, always running into degens.
+  //
+  // TODO: Fix this properly
+  // There are two alternatives: fix it in degen so that it never leaves double forwarding,
+  // or make sure we only use raw accessors in evac assist path when getting oop_size,
+  // including all exotic shapes like instanceMirrorKlass, and touching fwdptrs. The second
+  // option is partly done in jdk12, but not in earlier jdks.
+  FLAG_SET_DEFAULT(ShenandoahEvacAssist, 0);
 }
 
 bool ShenandoahTraversalHeuristics::should_start_normal_gc() const {
@@ -80,19 +103,127 @@ void ShenandoahTraversalHeuristics::choose_collection_set(ShenandoahCollectionSe
 
   ShenandoahHeapRegionSet* traversal_set = traversal_gc->traversal_set();
   traversal_set->clear();
+
+  RegionData *data = get_region_data_cache(heap->num_regions());
+  size_t cnt = 0;
+
+  // Step 0. Prepare all regions
+
   for (size_t i = 0; i < heap->num_regions(); i++) {
     ShenandoahHeapRegion* r = heap->get_region(i);
-    assert(!collection_set->is_in(r), "must not yet be in cset");
-    if (r->is_regular() && r->used() > 0) {
-      size_t garbage_percent = r->garbage() * 100 / ShenandoahHeapRegion::region_size_bytes();
-      if (garbage_percent > ShenandoahGarbageThreshold) {
-        collection_set->add_region(r);
+    if (r->used() > 0) {
+      if (r->is_regular()) {
+        data[cnt]._region = r;
+        data[cnt]._garbage = r->garbage();
+        data[cnt]._seqnum_last_alloc = r->seqnum_last_alloc_mutator();
+        cnt++;
       }
+      traversal_set->add_region(r);
     }
-    r->clear_live_data();
-    traversal_set->add_region(r);
   }
+
+  // The logic for cset selection is similar to that of adaptive:
+  //
+  //   1. We cannot get cset larger than available free space. Otherwise we guarantee OOME
+  //      during evacuation, and thus guarantee full GC. In practice, we also want to let
+  //      application to allocate something. This is why we limit CSet to some fraction of
+  //      available space. In non-overloaded heap, max_cset would contain all plausible candidates
+  //      over garbage threshold.
+  //
+  //   2. We should not get cset too low so that free threshold would not be met right
+  //      after the cycle. Otherwise we get back-to-back cycles for no reason if heap is
+  //      too fragmented. In non-overloaded non-fragmented heap min_garbage would be around zero.
+  //
+  // Therefore, we start by sorting the regions by garbage. Then we unconditionally add the best candidates
+  // before we meet min_garbage. Then we add all candidates that fit with a garbage threshold before
+  // we hit max_cset. When max_cset is hit, we terminate the cset selection. Note that in this scheme,
+  // ShenandoahGarbageThreshold is the soft threshold which would be ignored until min_garbage is hit.
+  //
+  // The significant complication is that liveness data was collected at the previous cycle, and only
+  // for those regions that were allocated before previous cycle started.
+
+  size_t actual_free = heap->free_set()->available();
+  size_t free_target = MIN2<size_t>(_free_threshold + MaxNormalStep, 100) * ShenandoahHeap::heap()->capacity() / 100;
+  size_t min_garbage = free_target > actual_free ? (free_target - actual_free) : 0;
+  size_t max_cset    = actual_free * 3 / 4;
+
+  log_info(gc, ergo)("Adaptive CSet Selection. Target Free: " SIZE_FORMAT "M, Actual Free: "
+                     SIZE_FORMAT "M, Max CSet: " SIZE_FORMAT "M, Min Garbage: " SIZE_FORMAT "M",
+                     free_target / M, actual_free / M, max_cset / M, min_garbage / M);
+
+  // Better select garbage-first regions, and then older ones
+  QuickSort::sort<RegionData>(data, (int) cnt, compare_by_garbage_then_alloc_seq_ascending, false);
+
+  size_t cur_cset = 0;
+  size_t cur_garbage = 0;
+
+  size_t garbage_threshold = ShenandoahHeapRegion::region_size_bytes() / 100 * ShenandoahGarbageThreshold;
+
+  // Step 1. Add trustworthy regions to collection set.
+  //
+  // We can trust live/garbage data from regions that were fully traversed during
+  // previous cycle. Even if actual liveness is different now, we can only have _less_
+  // live objects, because dead objects are not resurrected. Which means we can undershoot
+  // the collection set, but not overshoot it.
+
+  for (size_t i = 0; i < cnt; i++) {
+    if (data[i]._seqnum_last_alloc > _last_cset_select) continue;
+
+    ShenandoahHeapRegion* r = data[i]._region;
+    assert (r->is_regular(), "should have been filtered before");
+
+    size_t new_garbage = cur_garbage + r->garbage();
+    size_t new_cset    = cur_cset    + r->get_live_data_bytes();
+
+    if (new_cset > max_cset) {
+      break;
+    }
+
+    if ((new_garbage < min_garbage) || (r->garbage() > garbage_threshold)) {
+      assert(!collection_set->is_in(r), "must not yet be in cset");
+      collection_set->add_region(r);
+      cur_cset = new_cset;
+      cur_garbage = new_garbage;
+    }
+  }
+
+  // Step 2. Try to catch some recently allocated regions for evacuation ride.
+  //
+  // Pessimistically assume we are going to evacuate the entire region. While this
+  // is very pessimistic and in most cases undershoots the collection set when regions
+  // are mostly dead, it also provides more safety against running into allocation
+  // failure when newly allocated regions are fully live.
+
+  for (size_t i = 0; i < cnt; i++) {
+    if (data[i]._seqnum_last_alloc <= _last_cset_select) continue;
+
+    ShenandoahHeapRegion* r = data[i]._region;
+    assert (r->is_regular(), "should have been filtered before");
+
+    // size_t new_garbage = cur_garbage + 0; (implied)
+    size_t new_cset = cur_cset + r->used();
+
+    if (new_cset > max_cset) {
+      break;
+    }
+
+    assert(!collection_set->is_in(r), "must not yet be in cset");
+    collection_set->add_region(r);
+    cur_cset = new_cset;
+  }
+
+  // Step 3. Clear liveness data
+  // TODO: Merge it with step 0, but save live data in RegionData before.
+  for (size_t i = 0; i < heap->num_regions(); i++) {
+    ShenandoahHeapRegion* r = heap->get_region(i);
+    if (r->used() > 0) {
+      r->clear_live_data();
+    }
+  }
+
   collection_set->update_region_status();
+
+  _last_cset_select = ShenandoahHeapRegion::seqnum_current_alloc();
 }
 
 void ShenandoahTraversalHeuristics::handle_cycle_success() {
@@ -168,8 +299,6 @@ ShenandoahHeap::GCCycleMode ShenandoahTraversalHeuristics::should_start_traversa
   size_t capacity = heap->capacity();
   size_t available = heap->free_set()->available();
 
-  double last_time_ms = (os::elapsedTime() - _last_cycle_end) * 1000;
-  bool periodic_gc = (last_time_ms > ShenandoahGuaranteedGCInterval);
   size_t threshold_available = (capacity * _free_threshold) / 100;
   size_t bytes_allocated = heap->bytes_allocated_since_gc_start();
   size_t threshold_bytes_allocated = heap->capacity() * ShenandoahAllocationThreshold / 100;
@@ -182,11 +311,10 @@ ShenandoahHeap::GCCycleMode ShenandoahTraversalHeuristics::should_start_traversa
     // Need to check that an appropriate number of regions have
     // been allocated since last concurrent mark too.
     return ShenandoahHeap::MAJOR;
-  } else if (periodic_gc) {
-    log_info(gc,ergo)("Periodic GC triggered. Time since last GC: %.0f ms, Guaranteed Interval: " UINTX_FORMAT " ms",
-                      last_time_ms, ShenandoahGuaranteedGCInterval);
+  } else if (ShenandoahHeuristics::should_start_normal_gc()) {
     return ShenandoahHeap::MAJOR;
   }
+
   return ShenandoahHeap::NONE;
 }
 

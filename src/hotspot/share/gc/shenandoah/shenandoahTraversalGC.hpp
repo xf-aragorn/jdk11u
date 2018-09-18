@@ -27,7 +27,6 @@
 #include "memory/allocation.hpp"
 #include "gc/shenandoah/shenandoahHeapRegionSet.hpp"
 #include "gc/shenandoah/shenandoahTaskqueue.hpp"
-#include "gc/shenandoah/shenandoahArrayCopyTaskQueue.hpp"
 
 class Thread;
 class ShenandoahHeap;
@@ -55,8 +54,6 @@ private:
 
   ShenandoahConnectionMatrix* const _matrix;
 
-  ShenandoahArrayCopyTaskQueue _arraycopy_task_queue;
-
 public:
   ShenandoahTraversalGC(ShenandoahHeap* heap, size_t num_regions);
   ~ShenandoahTraversalGC();
@@ -71,7 +68,7 @@ public:
   void final_traversal_collection();
 
   template <class T, bool STRING_DEDUP, bool DEGEN, bool UPDATE_MATRIX>
-  inline void process_oop(T* p, Thread* thread, ShenandoahObjToScanQueue* queue, oop base_obj);
+  inline void process_oop(T* p, Thread* thread, ShenandoahObjToScanQueue* queue, ShenandoahMarkingContext* const mark_context, oop base_obj);
 
   bool check_and_handle_cancelled_gc(ParallelTaskTerminator* terminator);
 
@@ -81,8 +78,6 @@ public:
   void flush_liveness(uint worker_id);
 
   void main_loop(uint worker_id, ParallelTaskTerminator* terminator);
-
-  void push_arraycopy(HeapWord* start, size_t count);
 
 private:
 
@@ -96,9 +91,6 @@ private:
   void weak_refs_work_doit();
 
   void fixup_roots();
-
-  template <class T>
-  bool process_arraycopy_task(T* cl);
 };
 
 #endif // SHARE_VM_GC_SHENANDOAH_SHENANDOAHTRAVERSALGC_HPP

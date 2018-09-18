@@ -331,8 +331,10 @@ AC_DEFUN_ONCE([HOTSPOT_SETUP_JVM_FEATURES],
 
   # Enable JFR by default, except for Zero, linux-sparcv9 and on minimal.
   if ! HOTSPOT_CHECK_JVM_VARIANT(zero); then
-    if test "x$OPENJDK_TARGET_OS" != xlinux || test "x$OPENJDK_TARGET_CPU" != xsparcv9; then
-      NON_MINIMAL_FEATURES="$NON_MINIMAL_FEATURES jfr"
+    if test "x$OPENJDK_TARGET_OS" != xaix; then
+      if test "x$OPENJDK_TARGET_OS" != xlinux || test "x$OPENJDK_TARGET_CPU" != xsparcv9; then
+        NON_MINIMAL_FEATURES="$NON_MINIMAL_FEATURES jfr"
+      fi
     fi
   fi
 
@@ -473,7 +475,7 @@ AC_DEFUN_ONCE([HOTSPOT_SETUP_JVM_FEATURES],
       JVM_FEATURES_aot="aot"
     fi
   else
-    if test "x$enable_aot" = "xno" || "x$DISABLE_AOT" = "xaot"; then
+    if test "x$enable_aot" = "xno" || test "x$DISABLE_AOT" = "xaot"; then
       AC_MSG_RESULT([no, forced])
     else
       AC_MSG_RESULT([no])
@@ -514,7 +516,7 @@ AC_DEFUN_ONCE([HOTSPOT_SETUP_JVM_FEATURES],
 
   # Enable features depending on variant.
   JVM_FEATURES_server="compiler1 compiler2 $NON_MINIMAL_FEATURES $JVM_FEATURES $JVM_FEATURES_jvmci $JVM_FEATURES_aot $JVM_FEATURES_graal"
-  JVM_FEATURES_client="compiler1 $NON_MINIMAL_FEATURES $JVM_FEATURES $JVM_FEATURES_jvmci"
+  JVM_FEATURES_client="compiler1 $NON_MINIMAL_FEATURES $JVM_FEATURES"
   JVM_FEATURES_core="$NON_MINIMAL_FEATURES $JVM_FEATURES"
   JVM_FEATURES_minimal="compiler1 minimal serialgc $JVM_FEATURES $JVM_FEATURES_link_time_opt"
   JVM_FEATURES_zero="zero $NON_MINIMAL_FEATURES $JVM_FEATURES"

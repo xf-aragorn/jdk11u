@@ -29,6 +29,7 @@
 #include "gc/shenandoah/shenandoahHeap.hpp"
 #include "gc/shenandoah/shenandoahHeap.inline.hpp"
 #include "gc/shenandoah/shenandoahHeapRegionSet.inline.hpp"
+#include "gc/shenandoah/shenandoahMarkingContext.inline.hpp"
 #include "gc/shenandoah/shenandoahTraversalGC.hpp"
 #include "memory/resourceArea.hpp"
 
@@ -61,11 +62,14 @@ void ShenandoahAsserts::print_obj(ShenandoahMessageBuffer& msg, oop obj) {
   stringStream ss;
   r->print_on(&ss);
 
+  ShenandoahMarkingContext* const next_ctx = heap->next_marking_context();
+  ShenandoahMarkingContext* const compl_ctx = heap->complete_marking_context();
+
   msg.append("  " PTR_FORMAT " - klass " PTR_FORMAT " %s\n", p2i(obj), p2i(obj->klass()), obj->klass()->external_name());
-  msg.append("    %3s allocated after complete mark start\n", heap->allocated_after_complete_mark_start((HeapWord *) obj) ? "" : "not");
-  msg.append("    %3s allocated after next mark start\n",     heap->allocated_after_next_mark_start((HeapWord *) obj)     ? "" : "not");
-  msg.append("    %3s marked complete\n",      heap->is_marked_complete(obj) ? "" : "not");
-  msg.append("    %3s marked next\n",          heap->is_marked_next(obj) ? "" : "not");
+  msg.append("    %3s allocated after complete mark start\n", compl_ctx->allocated_after_mark_start((HeapWord *) obj) ? "" : "not");
+  msg.append("    %3s allocated after next mark start\n",     next_ctx->allocated_after_mark_start((HeapWord *) obj)     ? "" : "not");
+  msg.append("    %3s marked complete\n",      compl_ctx->is_marked(obj) ? "" : "not");
+  msg.append("    %3s marked next\n",          next_ctx->is_marked(obj) ? "" : "not");
   msg.append("    %3s in collection set\n",    heap->in_collection_set(obj) ? "" : "not");
   if (heap->traversal_gc() != NULL) {
     msg.append("    %3s in root set\n",        heap->traversal_gc()->root_regions()->is_in((HeapWord*) obj) ? "" : "not");
@@ -320,7 +324,7 @@ void ShenandoahAsserts::assert_marked_complete(void* interior_loc, oop obj, cons
   assert_correct(interior_loc, obj, file, line);
 
   ShenandoahHeap* heap = ShenandoahHeap::heap_no_check();
-  if (!heap->is_marked_complete(obj)) {
+  if (!heap->complete_marking_context()->is_marked(obj)) {
     print_failure(_safe_all, obj, interior_loc, NULL, "Shenandoah assert_marked_complete failed",
                   "Object should be marked (complete)",
                   file, line);
@@ -331,7 +335,7 @@ void ShenandoahAsserts::assert_marked_next(void* interior_loc, oop obj, const ch
   assert_correct(interior_loc, obj, file, line);
 
   ShenandoahHeap* heap = ShenandoahHeap::heap_no_check();
-  if (!heap->is_marked_next(obj)) {
+  if (!heap->next_marking_context()->is_marked(obj)) {
     print_failure(_safe_all, obj, interior_loc, NULL, "Shenandoah assert_marked_next failed",
                   "Object should be marked (next)",
                   file, line);
@@ -358,14 +362,11 @@ void ShenandoahAsserts::assert_not_in_cset_loc(void* interior_loc, const char* f
   }
 }
 
-void ShenandoahAsserts::print_rp_failure(const char *label, BoolObjectClosure* actual, BoolObjectClosure* expected,
+void ShenandoahAsserts::print_rp_failure(const char *label, BoolObjectClosure* actual,
                                          const char *file, int line) {
   ShenandoahHeap* heap = ShenandoahHeap::heap();
   ShenandoahMessageBuffer msg("%s\n", label);
   msg.append(" Actual:                  " PTR_FORMAT "\n", p2i(actual));
-  msg.append(" Expected:                " PTR_FORMAT "\n", p2i(expected));
-  msg.append(" SH->_is_alive:           " PTR_FORMAT "\n", p2i(&heap->_is_alive));
-  msg.append(" SH->_forwarded_is_alive: " PTR_FORMAT "\n", p2i(&heap->_forwarded_is_alive));
   report_vm_error(file, line, msg.buffer());
 }
 
@@ -373,7 +374,7 @@ void ShenandoahAsserts::assert_rp_isalive_not_installed(const char *file, int li
   ShenandoahHeap* heap = ShenandoahHeap::heap();
   ReferenceProcessor* rp = heap->ref_processor();
   if (rp->is_alive_non_header() != NULL) {
-    print_rp_failure("Shenandoah assert_rp_isalive_not_installed failed", rp->is_alive_non_header(), NULL,
+    print_rp_failure("Shenandoah assert_rp_isalive_not_installed failed", rp->is_alive_non_header(),
                      file, line);
   }
 }
@@ -381,8 +382,8 @@ void ShenandoahAsserts::assert_rp_isalive_not_installed(const char *file, int li
 void ShenandoahAsserts::assert_rp_isalive_installed(const char *file, int line) {
   ShenandoahHeap* heap = ShenandoahHeap::heap();
   ReferenceProcessor* rp = heap->ref_processor();
-  if (rp->is_alive_non_header() != heap->is_alive_closure()) {
-    print_rp_failure("Shenandoah assert_rp_isalive_installed failed", rp->is_alive_non_header(), heap->is_alive_closure(),
+  if (rp->is_alive_non_header() == NULL) {
+    print_rp_failure("Shenandoah assert_rp_isalive_installed failed", rp->is_alive_non_header(),
                      file, line);
   }
 }

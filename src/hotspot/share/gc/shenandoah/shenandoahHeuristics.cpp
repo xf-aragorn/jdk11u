@@ -28,6 +28,7 @@
 #include "gc/shenandoah/shenandoahHeap.inline.hpp"
 #include "gc/shenandoah/shenandoahHeapRegion.hpp"
 #include "gc/shenandoah/shenandoahHeuristics.hpp"
+#include "gc/shenandoah/shenandoahMarkingContext.inline.hpp"
 
 int ShenandoahHeuristics::compare_by_garbage(RegionData a, RegionData b) {
   if (a._garbage > b._garbage)
@@ -35,6 +36,14 @@ int ShenandoahHeuristics::compare_by_garbage(RegionData a, RegionData b) {
   else if (a._garbage < b._garbage)
     return 1;
   else return 0;
+}
+
+int ShenandoahHeuristics::compare_by_garbage_then_alloc_seq_ascending(RegionData a, RegionData b) {
+  int r = compare_by_garbage(a, b);
+  if (r != 0) {
+    return r;
+  }
+  return compare_by_alloc_seq_ascending(a, b);
 }
 
 int ShenandoahHeuristics::compare_by_alloc_seq_ascending(RegionData a, RegionData b) {
@@ -58,17 +67,17 @@ int ShenandoahHeuristics::compare_by_connects(RegionConnections a, RegionConnect
 }
 
 ShenandoahHeuristics::ShenandoahHeuristics() :
-  _bytes_in_cset(0),
-  _degenerated_cycles_in_a_row(0),
-  _successful_cycles_in_a_row(0),
+  _update_refs_early(false),
+  _update_refs_adaptive(false),
   _region_data(NULL),
   _region_data_size(0),
   _region_connects(NULL),
   _region_connects_size(0),
-  _update_refs_early(false),
-  _update_refs_adaptive(false),
-  _last_cycle_end(0)
-{
+  _degenerated_cycles_in_a_row(0),
+  _successful_cycles_in_a_row(0),
+  _bytes_in_cset(0),
+  _last_cycle_end(0) {
+
   if (strcmp(ShenandoahUpdateRefsEarly, "on") == 0 ||
       strcmp(ShenandoahUpdateRefsEarly, "true") == 0 ) {
     _update_refs_early = true;
@@ -155,6 +164,8 @@ void ShenandoahHeuristics::choose_collection_set(ShenandoahCollectionSet* collec
   size_t free = 0;
   size_t free_regions = 0;
 
+  ShenandoahMarkingContext* const ctx = heap->complete_marking_context();
+
   for (size_t i = 0; i < num_regions; i++) {
     ShenandoahHeapRegion* region = heap->get_region(i);
 
@@ -180,7 +191,7 @@ void ShenandoahHeuristics::choose_collection_set(ShenandoahCollectionSet* collec
       // Reclaim humongous regions here, and count them as the immediate garbage
 #ifdef ASSERT
       bool reg_live = region->has_live();
-      bool bm_live = heap->is_marked_complete(oop(region->bottom() + BrooksPointer::word_size()));
+      bool bm_live = ctx->is_marked(oop(region->bottom() + BrooksPointer::word_size()));
       assert(reg_live == bm_live,
              "Humongous liveness and marks should agree. Region live: %s; Bitmap live: %s; Region Live Words: " SIZE_FORMAT,
              BOOL_TO_STR(reg_live), BOOL_TO_STR(bm_live), region->get_live_data_words());
@@ -247,6 +258,16 @@ void ShenandoahHeuristics::print_thresholds() {
 
 bool ShenandoahHeuristics::should_start_update_refs() {
   return _update_refs_early;
+}
+
+bool ShenandoahHeuristics::should_start_normal_gc() const {
+  double last_time_ms = (os::elapsedTime() - _last_cycle_end) * 1000;
+  bool periodic_gc = (last_time_ms > ShenandoahGuaranteedGCInterval);
+  if (periodic_gc) {
+    log_info(gc,ergo)("Periodic GC triggered. Time since last GC: %.0f ms, Guaranteed Interval: " UINTX_FORMAT " ms",
+                      last_time_ms, ShenandoahGuaranteedGCInterval);
+  }
+  return periodic_gc;
 }
 
 ShenandoahHeap::GCCycleMode ShenandoahHeuristics::should_start_traversal_gc() {

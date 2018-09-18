@@ -99,6 +99,10 @@
           "Run a separate concurrent reference updating phase after"        \
           "concurrent evacuation. Possible values: 'on', 'off', 'adaptive'")\
                                                                             \
+  experimental(uintx, ShenandoahEvacAssist, 10,                             \
+          "How many objects to evacuate on WB assist path. "                \
+          "Use zero to disable.")                                           \
+                                                                            \
   product(uintx, ShenandoahRefProcFrequency, 5,                             \
           "How often should (weak, soft, etc) references be processed. "    \
           "References get processed at every Nth GC cycle. "                \
@@ -203,10 +207,6 @@
   experimental(bool, ShenandoahConcurrentScanCodeRoots, true,               \
           "Scan code roots concurrently, instead of during a pause")        \
                                                                             \
-  experimental(bool, ShenandoahConcurrentEvacCodeRoots, false,              \
-          "Evacuate code roots concurrently, instead of during a pause. "   \
-          "This requires ShenandoahBarriersForConst to be enabled.")        \
-                                                                            \
   experimental(uintx, ShenandoahCodeRootsStyle, 2,                          \
           "Use this style to scan code cache:"                              \
           " 0 - sequential iterator;"                                       \
@@ -226,12 +226,6 @@
                                                                             \
   experimental(bool, ShenandoahUncommitWithIdle, false,                     \
            "Uncommit memory using MADV_DONTNEED.")                          \
-                                                                            \
-  experimental(bool, ShenandoahBarriersForConst, false,                     \
-          "Emit barriers for constant oops in generated code, improving "   \
-          "throughput. If no barriers are emitted, GC will need to "        \
-          "pre-evacuate code roots before returning from STW, adding to "   \
-          "pause time.")                                                    \
                                                                             \
   experimental(bool, ShenandoahDontIncreaseWBFreq, true,                    \
           "Common 2 WriteBarriers or WriteBarrier and a ReadBarrier only "  \
@@ -290,9 +284,6 @@
               "The time period for one step in control loop interval "      \
               "adjustment. Lower values make adjustments faster, at the "   \
               "expense of higher perf overhead. Time is in milliseconds.")  \
-                                                                            \
-  diagnostic(bool, ShenandoahAllocImplicitLive, true,                       \
-              "Treat (non-evac) allocations implicitely live")              \
                                                                             \
   diagnostic(bool, ShenandoahSATBBarrier, true,                             \
           "Turn on/off SATB barriers in Shenandoah")                        \
@@ -413,6 +404,13 @@
           "uniform during the cycle.")                                      \
           range(0, 100)                                                     \
                                                                             \
+  experimental(double, ShenandoahPacingSurcharge, 1.1,                      \
+          "Additional pacing tax surcharge to help unclutter the heap. "    \
+          "Larger values makes the pacing more aggressive. Lower values "   \
+          "risk GC cycles finish with less memory than were available at "  \
+          "the beginning of it.")                                           \
+          range(1, 100)                                                     \
+                                                                            \
   experimental(uintx, ShenandoahCriticalFreeThreshold, 1,                   \
           "Percent of heap that needs to be free after recovery cycles, "   \
           "either Degenerated or Full GC. If this much space is not "       \
@@ -430,9 +428,13 @@
   diagnostic(bool, ShenandoahRecycleClearsBitmap, false,                    \
           "Recycling a region also clears the marking bitmap")              \
                                                                             \
-  diagnostic(size_t, ShenandoahEnqueueArrayCopyThreshold, 32,               \
-          "Arrays and objects are enqueued instead of processed in-place"   \
-          "when their size exceed this threshold")                          \
-
+  diagnostic(bool, ShenandoahTerminationTrace, false,                       \
+          "Tracing task termination timings")                               \
+                                                                            \
+  diagnostic(bool, ShenandoahElasticTLAB, true,                             \
+          "Use Elastic TLABs with Shenandoah")                              \
+                                                                            \
+  diagnostic(bool, ShenandoahCompileCheck, false,                           \
+          "Assert that methods are successfully compilable")                \
 
 #endif // SHARE_VM_GC_SHENANDOAH_SHENANDOAH_GLOBALS_HPP

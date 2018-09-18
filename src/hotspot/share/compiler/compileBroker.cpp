@@ -1637,6 +1637,12 @@ bool CompileBroker::init_compiler_runtime() {
  * out to be a problem.
  */
 void CompileBroker::shutdown_compiler_runtime(AbstractCompiler* comp, CompilerThread* thread) {
+  // Free buffer blob, if allocated
+  if (thread->get_buffer_blob() != NULL) {
+    MutexLockerEx mu(CodeCache_lock, Mutex::_no_safepoint_check_flag);
+    CodeCache::free(thread->get_buffer_blob());
+  }
+
   if (comp->should_perform_shutdown()) {
     // There are two reasons for shutting down the compiler
     // 1) compiler runtime initialization failed
@@ -1766,6 +1772,11 @@ void CompileBroker::compiler_thread_loop() {
           if (TraceCompilerThreads) {
             tty->print_cr("Removing compiler thread %s after " JLONG_FORMAT " ms idle time",
                           thread->name(), thread->idle_time_millis());
+          }
+          // Free buffer blob, if allocated
+          if (thread->get_buffer_blob() != NULL) {
+            MutexLockerEx mu(CodeCache_lock, Mutex::_no_safepoint_check_flag);
+            CodeCache::free(thread->get_buffer_blob());
           }
           return; // Stop this thread.
         }
@@ -2082,6 +2093,10 @@ void CompileBroker::invoke_compiler_on_method(CompileTask* task) {
 
     ciMethod* target = ci_env.get_method_from_handle(target_handle);
 
+#if INCLUDE_SHENANDOAHGC
+    bool target_compilable = target->can_be_parsed() && target->can_be_compiled();
+#endif
+
     TraceTime t1("compilation", &time);
     EventCompilation event;
 
@@ -2112,6 +2127,13 @@ void CompileBroker::invoke_compiler_on_method(CompileTask* task) {
       retry_message = ci_env.retry_message();
       ci_env.report_failure(failure_reason);
     }
+
+#if INCLUDE_SHENANDOAHGC
+    guarantee(!UseShenandoahGC || !ShenandoahCompileCheck || !target_compilable || (compilable != ciEnv::MethodCompilable_not_at_tier),
+              "Not compilable on level %d due to: %s", task_level, failure_reason);
+    guarantee(!UseShenandoahGC || !ShenandoahCompileCheck || !target_compilable ||(compilable != ciEnv::MethodCompilable_never || !target_compilable),
+              "Never compilable due to: %s", failure_reason);
+#endif
 
     post_compile(thread, task, !ci_env.failing(), &ci_env);
     if (event.should_commit()) {

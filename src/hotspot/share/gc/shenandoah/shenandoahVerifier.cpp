@@ -29,6 +29,7 @@
 #include "gc/shenandoah/shenandoahPhaseTimings.hpp"
 #include "gc/shenandoah/shenandoahHeap.hpp"
 #include "gc/shenandoah/shenandoahHeap.inline.hpp"
+#include "gc/shenandoah/shenandoahMarkingContext.inline.hpp"
 #include "gc/shenandoah/shenandoahRootProcessor.hpp"
 #include "gc/shenandoah/shenandoahTaskqueue.hpp"
 #include "gc/shenandoah/shenandoahVerifier.hpp"
@@ -54,8 +55,14 @@ private:
 public:
   ShenandoahVerifyOopClosure(ShenandoahVerifierStack* stack, MarkBitMap* map, ShenandoahLivenessData* ld,
                              const char* phase, ShenandoahVerifier::VerifyOptions options) :
-          _stack(stack), _heap(ShenandoahHeap::heap()), _map(map), _ld(ld), _loc(NULL), _interior_loc(NULL),
-          _phase(phase), _options(options) {};
+    _phase(phase),
+    _options(options),
+    _stack(stack),
+    _heap(ShenandoahHeap::heap()),
+    _map(map),
+    _ld(ld),
+    _interior_loc(NULL),
+    _loc(NULL) { }
 
 private:
   void check(ShenandoahAsserts::SafeLevel level, oop obj, bool test, const char* label) {
@@ -193,11 +200,11 @@ private:
         // skip
         break;
       case ShenandoahVerifier::_verify_marked_next:
-        check(ShenandoahAsserts::_safe_all, obj, _heap->is_marked_next(obj),
+        check(ShenandoahAsserts::_safe_all, obj, _heap->next_marking_context()->is_marked(obj),
                "Must be marked in next bitmap");
         break;
       case ShenandoahVerifier::_verify_marked_complete:
-        check(ShenandoahAsserts::_safe_all, obj, _heap->is_marked_complete(obj),
+        check(ShenandoahAsserts::_safe_all, obj, _heap->complete_marking_context()->is_marked(obj),
                "Must be marked in complete bitmap");
         break;
       default:
@@ -329,7 +336,9 @@ private:
   ShenandoahVerifier::VerifyRegions _regions;
 public:
   ShenandoahVerifyHeapRegionClosure(const char* phase, ShenandoahVerifier::VerifyRegions regions) :
-          _heap(ShenandoahHeap::heap()), _regions(regions), _phase(phase) {};
+    _heap(ShenandoahHeap::heap()),
+    _phase(phase),
+    _regions(regions) {};
 
   void print_failure(ShenandoahHeapRegion* r, const char* label) {
     ResourceMark rm;
@@ -374,10 +383,10 @@ public:
     verify(r, r->capacity() == ShenandoahHeapRegion::region_size_bytes(),
            "Capacity should match region size");
 
-    verify(r, r->bottom() <= _heap->complete_top_at_mark_start(r->bottom()),
+    verify(r, r->bottom() <= _heap->complete_marking_context()->top_at_mark_start(r->region_number()),
            "Region top should not be less than bottom");
 
-    verify(r, _heap->complete_top_at_mark_start(r->bottom()) <= r->top(),
+    verify(r, _heap->complete_marking_context()->top_at_mark_start(r->region_number()) <= r->top(),
            "Complete TAMS should not be larger than top");
 
     verify(r, r->get_live_data_bytes() <= r->capacity(),
@@ -448,9 +457,14 @@ public:
                                   ShenandoahRootProcessor* rp,
                                   const char* label,
                                   ShenandoahVerifier::VerifyOptions options) :
-          AbstractGangTask("Shenandoah Parallel Verifier Reachable Task"),
-          _heap(ShenandoahHeap::heap()), _rp(rp), _ld(ld), _bitmap(bitmap), _processed(0),
-          _label(label), _options(options) {};
+    AbstractGangTask("Shenandoah Parallel Verifier Reachable Task"),
+    _label(label),
+    _rp(rp),
+    _options(options),
+    _heap(ShenandoahHeap::heap()),
+    _ld(ld),
+    _bitmap(bitmap),
+    _processed(0) {};
 
   size_t processed() {
     return _processed;
@@ -505,8 +519,13 @@ public:
                                      const char* label,
                                      ShenandoahVerifier::VerifyOptions options) :
           AbstractGangTask("Shenandoah Parallel Verifier Marked Region"),
-          _heap(ShenandoahHeap::heap()), _ld(ld), _bitmap(bitmap), _claimed(0), _processed(0),
-          _label(label), _options(options) {};
+          _label(label),
+          _options(options),
+          _heap(ShenandoahHeap::heap()),
+          _bitmap(bitmap),
+          _ld(ld),
+          _claimed(0),
+          _processed(0) {};
 
   size_t processed() {
     return _processed;
@@ -536,7 +555,7 @@ public:
   virtual void work_humongous(ShenandoahHeapRegion *r, ShenandoahVerifierStack& stack, ShenandoahVerifyOopClosure& cl) {
     size_t processed = 0;
     HeapWord* obj = r->bottom() + BrooksPointer::word_size();
-    if (_heap->is_marked_complete((oop)obj)) {
+    if (_heap->complete_marking_context()->is_marked((oop)obj)) {
       verify_and_follow(obj, stack, cl, &processed);
     }
     Atomic::add(processed, &_processed);
@@ -544,8 +563,8 @@ public:
 
   virtual void work_regular(ShenandoahHeapRegion *r, ShenandoahVerifierStack &stack, ShenandoahVerifyOopClosure &cl) {
     size_t processed = 0;
-    MarkBitMap* mark_bit_map = _heap->complete_mark_bit_map();
-    HeapWord* tams = _heap->complete_top_at_mark_start(r->bottom());
+    MarkBitMap* mark_bit_map = _heap->complete_marking_context()->mark_bit_map();
+    HeapWord* tams = _heap->complete_marking_context()->top_at_mark_start(r->region_number());
 
     // Bitmaps, before TAMS
     if (tams > r->bottom()) {

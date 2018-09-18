@@ -54,8 +54,11 @@ public:
 };
 
 class ShenandoahNMethodOopInitializer : public OopClosure {
+private:
+  ShenandoahHeap* const _heap;
+
 public:
-  ShenandoahNMethodOopInitializer() {};
+  ShenandoahNMethodOopInitializer() : _heap(ShenandoahHeap::heap()) {};
 
 private:
   template <class T>
@@ -65,8 +68,11 @@ private:
       oop obj1 = CompressedOops::decode_not_null(o);
       oop obj2 = ShenandoahBarrierSet::barrier_set()->write_barrier(obj1);
       if (! oopDesc::unsafe_equals(obj1, obj2)) {
-        assert (!ShenandoahHeap::heap()->in_collection_set(obj2), "sanity");
+        assert (!_heap->in_collection_set(obj2), "sanity");
         RawAccess<IS_NOT_NULL>::oop_store(p, obj2);
+        if (_heap->is_concurrent_traversal_in_progress()) {
+          ShenandoahBarrierSet::barrier_set()->enqueue(obj2);
+        }
       }
     }
   }
@@ -114,10 +120,11 @@ void ShenandoahCodeRoots::add_nmethod(nmethod* nm) {
         int idx = _recorded_nms->find(nm, ShenandoahNMethod::find_with_nmethod);
         if (idx != -1) {
           ShenandoahNMethod* old = _recorded_nms->at(idx);
-          _recorded_nms->delete_at(idx);
+          _recorded_nms->at_put(idx, nmr);
           delete old;
+        } else {
+          _recorded_nms->append(nmr);
         }
-        _recorded_nms->append(nmr);
       }
       break;
     }
@@ -154,8 +161,9 @@ void ShenandoahCodeRoots::remove_nmethod(nmethod* nm) {
 }
 
 ShenandoahCodeRootsIterator::ShenandoahCodeRootsIterator() :
-        _claimed(0), _heap(ShenandoahHeap::heap()),
-        _par_iterator(CodeCache::parallel_iterator()) {
+        _heap(ShenandoahHeap::heap()),
+        _par_iterator(CodeCache::parallel_iterator()),
+        _claimed(0) {
   switch (ShenandoahCodeRootsStyle) {
     case 0:
     case 1: {

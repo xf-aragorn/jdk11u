@@ -41,16 +41,19 @@ private:
   char _oom_during_evac;
   SATBMarkQueue  _satb_mark_queue;
   PLAB* _gclab;
+  size_t _gclab_size;
   uint  _worker_id;
   bool _force_satb_flush;
 
   ShenandoahThreadLocalData() :
     _gc_state(0),
     _oom_during_evac(0),
+    _satb_mark_queue(&ShenandoahBarrierSet::satb_mark_queue_set()),
     _gclab(NULL),
+    _gclab_size(0),
     _worker_id(INVALID_WORKER_ID),
-    _force_satb_flush(false),
-    _satb_mark_queue(&ShenandoahBarrierSet::satb_mark_queue_set()) {}
+    _force_satb_flush(false) {
+  }
 
   ~ShenandoahThreadLocalData() {
     if (_gclab != NULL) {
@@ -119,15 +122,20 @@ public:
   }
 
   static void initialize_gclab(Thread* thread) {
-    if (thread->is_Java_thread()) {
-      data(thread)->_gclab = new PLAB(OldPLABSize);
-    } else {
-      data(thread)->_gclab = new PLAB(YoungPLABSize);
-    }
+    data(thread)->_gclab = new PLAB(PLAB::min_size());
+    data(thread)->_gclab_size = 0;
   }
 
   static PLAB* gclab(Thread* thread) {
     return data(thread)->_gclab;
+  }
+
+  static size_t gclab_size(Thread* thread) {
+    return data(thread)->_gclab_size;
+  }
+
+  static void set_gclab_size(Thread* thread, size_t v) {
+    data(thread)->_gclab_size = v;
   }
 
 #ifdef ASSERT

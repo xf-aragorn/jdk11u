@@ -246,22 +246,14 @@ void LIRItem::load_for_store(BasicType type) {
 void LIRItem::load_item_force(LIR_Opr reg) {
   LIR_Opr r = result();
   if (r != reg) {
-    _result = _gen->force_opr_to(r, reg);
-  }
-}
-
-LIR_Opr LIRGenerator::force_opr_to(LIR_Opr op, LIR_Opr reg) {
-  if (op != reg) {
 #if !defined(ARM) && !defined(E500V2)
-    if (op->type() != reg->type()) {
+    if (r->type() != reg->type()) {
       // moves between different types need an intervening spill slot
-      op = force_to_spill(op, reg->type());
+      r = _gen->force_to_spill(r, reg->type());
     }
 #endif
-    __ move(op, reg);
-    return reg;
-  } else {
-    return op;
+    __ move(r, reg);
+    _result = reg;
   }
 }
 
@@ -1534,15 +1526,13 @@ void LIRGenerator::do_StoreField(StoreField* x) {
   }
 #endif
 
-  LIR_Opr obj = object.result();
-
   if (x->needs_null_check() &&
       (needs_patching ||
        MacroAssembler::needs_explicit_null_check(x->offset()))) {
     // Emit an explicit null check because the offset is too large.
     // If the class is not loaded and the object is NULL, we need to deoptimize to throw a
     // NoClassDefFoundError in the interpreter instead of an implicit NPE from compiled code.
-    __ null_check(obj, new CodeEmitInfo(info), /* deoptimize */ needs_patching);
+    __ null_check(object.result(), new CodeEmitInfo(info), /* deoptimize */ needs_patching);
   }
 
   DecoratorSet decorators = IN_HEAP;
@@ -1652,7 +1642,6 @@ LIR_Opr LIRGenerator::access_atomic_cmpxchg_at(DecoratorSet decorators, BasicTyp
   decorators |= C1_WRITE_ACCESS;
   decorators |= ((decorators & MO_DECORATOR_MASK) != 0) ? MO_SEQ_CST : 0;
   LIRAccess access(this, decorators, base, offset, type);
-  new_value.load_item();
   if (access.is_raw()) {
     return _barrier_set->BarrierSetC1::atomic_cmpxchg_at(access, cmp_value, new_value);
   } else {
@@ -1729,12 +1718,12 @@ void LIRGenerator::do_LoadField(LoadField* x) {
   }
 #endif
 
-  LIR_Opr obj = object.result();
   bool stress_deopt = StressLoopInvariantCodeMotion && info && info->deoptimize_on_exception();
   if (x->needs_null_check() &&
       (needs_patching ||
        MacroAssembler::needs_explicit_null_check(x->offset()) ||
        stress_deopt)) {
+    LIR_Opr obj = object.result();
     if (stress_deopt) {
       obj = new_register(T_OBJECT);
       __ move(LIR_OprFact::oopConst(NULL), obj);
@@ -2335,7 +2324,9 @@ void LIRGenerator::do_TableSwitch(TableSwitch* x) {
   if (compilation()->env()->comp_level() == CompLevel_full_profile && UseSwitchProfiling) {
     ciMethod* method = x->state()->scope()->method();
     ciMethodData* md = method->method_data_or_null();
+    assert(md != NULL, "Sanity");
     ciProfileData* data = md->bci_to_data(x->state()->bci());
+    assert(data != NULL, "must have profiling data");
     assert(data->is_MultiBranchData(), "bad profile data?");
     int default_count_offset = md->byte_offset_of_slot(data, MultiBranchData::default_count_offset());
     LIR_Opr md_reg = new_register(T_METADATA);
@@ -2391,7 +2382,9 @@ void LIRGenerator::do_LookupSwitch(LookupSwitch* x) {
   if (compilation()->env()->comp_level() == CompLevel_full_profile && UseSwitchProfiling) {
     ciMethod* method = x->state()->scope()->method();
     ciMethodData* md = method->method_data_or_null();
+    assert(md != NULL, "Sanity");
     ciProfileData* data = md->bci_to_data(x->state()->bci());
+    assert(data != NULL, "must have profiling data");
     assert(data->is_MultiBranchData(), "bad profile data?");
     int default_count_offset = md->byte_offset_of_slot(data, MultiBranchData::default_count_offset());
     LIR_Opr md_reg = new_register(T_METADATA);
@@ -2689,7 +2682,6 @@ void LIRGenerator::do_Base(Base* x) {
       __ load_stack_address_monitor(0, lock);
 
       CodeEmitInfo* info = new CodeEmitInfo(scope()->start()->state()->copy(ValueStack::StateBefore, SynchronizationEntryBCI), NULL, x->check_flag(Instruction::DeoptimizeOnException));
-      obj = access_resolve_for_write(IN_HEAP | IS_NOT_NULL, obj, info);
       CodeStub* slow_path = new MonitorEnterStub(obj, lock, info);
 
       // receiver is guaranteed non-NULL so don't need CodeEmitInfo
@@ -3101,6 +3093,7 @@ void LIRGenerator::profile_arguments(ProfileCall* x) {
   if (compilation()->profile_arguments()) {
     int bci = x->bci_of_invoke();
     ciMethodData* md = x->method()->method_data_or_null();
+    assert(md != NULL, "Sanity");
     ciProfileData* data = md->bci_to_data(bci);
     if (data != NULL) {
       if ((data->is_CallTypeData() && data->as_CallTypeData()->has_arguments()) ||
@@ -3237,6 +3230,7 @@ void LIRGenerator::do_ProfileCall(ProfileCall* x) {
 void LIRGenerator::do_ProfileReturnType(ProfileReturnType* x) {
   int bci = x->bci_of_invoke();
   ciMethodData* md = x->method()->method_data_or_null();
+  assert(md != NULL, "Sanity");
   ciProfileData* data = md->bci_to_data(bci);
   if (data != NULL) {
     assert(data->is_CallTypeData() || data->is_VirtualCallTypeData(), "wrong profile data type");

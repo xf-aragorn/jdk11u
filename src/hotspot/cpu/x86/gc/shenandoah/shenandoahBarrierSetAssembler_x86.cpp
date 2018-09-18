@@ -346,7 +346,7 @@ void ShenandoahBarrierSetAssembler::read_barrier(MacroAssembler* masm, Register 
 }
 
 void ShenandoahBarrierSetAssembler::read_barrier_impl(MacroAssembler* masm, Register dst) {
-  assert(UseShenandoahGC && (ShenandoahReadBarrier || ShenandoahStoreValReadBarrier), "should be enabled");
+  assert(UseShenandoahGC && (ShenandoahReadBarrier || ShenandoahStoreValReadBarrier || ShenandoahCASBarrier), "should be enabled");
   Label is_null;
   __ testptr(dst, dst);
   __ jcc(Assembler::zero, is_null);
@@ -361,7 +361,7 @@ void ShenandoahBarrierSetAssembler::read_barrier_not_null(MacroAssembler* masm, 
 }
 
 void ShenandoahBarrierSetAssembler::read_barrier_not_null_impl(MacroAssembler* masm, Register dst) {
-  assert(UseShenandoahGC && (ShenandoahReadBarrier || ShenandoahStoreValReadBarrier), "should be enabled");
+  assert(UseShenandoahGC && (ShenandoahReadBarrier || ShenandoahStoreValReadBarrier || ShenandoahCASBarrier), "should be enabled");
   __ movptr(dst, Address(dst, BrooksPointer::byte_offset()));
 }
 
@@ -638,7 +638,16 @@ void ShenandoahBarrierSetAssembler::resolve_for_read(MacroAssembler* masm, Decor
 }
 
 void ShenandoahBarrierSetAssembler::resolve_for_write(MacroAssembler* masm, DecoratorSet decorators, Register obj) {
-  write_barrier(masm, obj);
+  bool oop_not_null = (decorators & IS_NOT_NULL) != 0;
+  if (oop_not_null) {
+    write_barrier(masm, obj);
+  } else {
+    Label done;
+    __ testptr(obj, obj);
+    __ jcc(Assembler::zero, done);
+    write_barrier(masm, obj);
+    __ bind(done);
+  }
 }
 
 // Special Shenandoah CAS implementation that handles false negatives
@@ -706,7 +715,7 @@ void ShenandoahBarrierSetAssembler::cmpxchg_oop(MacroAssembler* masm, DecoratorS
   if (UseCompressedOops) {
     __ decode_heap_oop(tmp1);
   }
-  __ resolve_for_read(0, tmp1);
+  read_barrier_impl(masm, tmp1);
 
   if (UseCompressedOops) {
     __ movl(tmp2, oldval);
@@ -714,7 +723,7 @@ void ShenandoahBarrierSetAssembler::cmpxchg_oop(MacroAssembler* masm, DecoratorS
   } else {
     __ movptr(tmp2, oldval);
   }
-  __ resolve_for_read(0, tmp2);
+  read_barrier_impl(masm, tmp2);
 
   __ cmpptr(tmp1, tmp2);
   __ jcc(Assembler::notEqual, done, true);
@@ -740,7 +749,7 @@ void ShenandoahBarrierSetAssembler::cmpxchg_oop(MacroAssembler* masm, DecoratorS
   } else {
     __ movptr(tmp2, oldval);
   }
-  __ resolve_for_read(0, tmp2);
+  read_barrier_impl(masm, tmp2);
 
   __ cmpptr(tmp1, tmp2);
   __ jcc(Assembler::equal, retry, true);

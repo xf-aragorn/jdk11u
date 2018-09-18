@@ -44,10 +44,10 @@ ShenandoahControlThread::ShenandoahControlThread() :
   _alloc_failure_waiters_lock(Mutex::leaf, "ShenandoahAllocFailureGC_lock", true, Monitor::_safepoint_check_always),
   _explicit_gc_waiters_lock(Mutex::leaf, "ShenandoahExplicitGC_lock", true, Monitor::_safepoint_check_always),
   _periodic_task(this),
+  _allocs_seen(0),
   _explicit_gc_cause(GCCause::_no_cause_specified),
-  _degen_point(ShenandoahHeap::_degenerated_outside_cycle),
-  _allocs_seen(0)
-{
+  _degen_point(ShenandoahHeap::_degenerated_outside_cycle) {
+
   create_and_start();
   _periodic_task.enroll();
   _periodic_satb_flush_task.enroll();
@@ -223,7 +223,7 @@ void ShenandoahControlThread::run_service() {
 
     double current = os::elapsedTime();
 
-    if (ShenandoahUncommit && (current - last_shrink_time > shrink_period)) {
+    if (ShenandoahUncommit && (explicit_gc_requested || (current - last_shrink_time > shrink_period))) {
       // Try to uncommit enough stale regions. Explicit GC tries to uncommit everything.
       // Regular paths uncommit only occasionally.
       double shrink_before = explicit_gc_requested ?
@@ -463,7 +463,8 @@ void ShenandoahControlThread::handle_alloc_failure(size_t words) {
 
   if (try_set_alloc_failure_gc()) {
     // Only report the first allocation failure
-    log_info(gc)("Failed to allocate " SIZE_FORMAT "K", words * HeapWordSize / K);
+    log_info(gc)("Failed to allocate " SIZE_FORMAT "%s",
+                 byte_size_in_proper_unit(words * HeapWordSize), proper_unit_for_byte_size(words * HeapWordSize));
 
     // Now that alloc failure GC is scheduled, we can abort everything else
     heap->cancel_gc(GCCause::_allocation_failure);
@@ -484,7 +485,8 @@ void ShenandoahControlThread::handle_alloc_failure_evac(size_t words) {
 
   if (try_set_alloc_failure_gc()) {
     // Only report the first allocation failure
-    log_info(gc)("Failed to allocate " SIZE_FORMAT "K for evacuation", words * HeapWordSize / K);
+    log_info(gc)("Failed to allocate " SIZE_FORMAT "%s for evacuation",
+                 byte_size_in_proper_unit(words * HeapWordSize), proper_unit_for_byte_size(words * HeapWordSize));
   }
 
   // Forcefully report allocation failure

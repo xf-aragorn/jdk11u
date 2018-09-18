@@ -111,7 +111,7 @@ bool ShenandoahBarrierNode::needs_barrier_impl(PhaseGVN* phase, ShenandoahBarrie
   }
   if (type->make_oopptr() && type->make_oopptr()->const_oop() != NULL) {
     // tty->print_cr("killed barrier for constant object");
-    return ShenandoahBarriersForConst;
+    return false;
   }
 
   if (ShenandoahOptimizeStableFinals) {
@@ -626,27 +626,7 @@ bool ShenandoahWriteBarrierNode::is_evacuation_in_progress_test(Node* iff) {
 }
 
 bool ShenandoahWriteBarrierNode::is_heap_stable_test(Node* iff) {
-  if (!UseShenandoahGC) {
-    return false;
-  }
-  assert(iff->is_If(), "bad input");
-  if (iff->Opcode() != Op_If) {
-    return false;
-  }
-  Node* bol = iff->in(1);
-  if (bol == NULL || !bol->is_Bool() || bol->as_Bool()->_test._test != BoolTest::ne) {
-    return false;
-  }
-  Node* cmp = bol->in(1);
-  if (cmp->Opcode() != Op_CmpI) {
-    return false;
-  }
-  Node* in1 = cmp->in(1);
-  Node* in2 = cmp->in(2);
-  if (in2->find_int_con(-1) != 0) {
-    return false;
-  }
-  return is_gc_state_load(in1);
+  return is_heap_state_test(iff, ShenandoahHeap::HAS_FORWARDED);
 }
 
 bool ShenandoahWriteBarrierNode::is_gc_state_load(Node *n) {
@@ -972,7 +952,7 @@ bool ShenandoahBarrierNode::verify_helper(Node* in, Node_Stack& phis, VectorSet&
         assert(!in->in(AddPNode::Address)->is_top(), "no raw memory access");
         in = in->in(AddPNode::Address);
         continue;
-      } else if (in->is_Con() && !ShenandoahBarriersForConst) {
+      } else if (in->is_Con()) {
         if (trace) {tty->print("Found constant"); in->dump();}
       } else if (in->is_ShenandoahBarrier()) {
         if (t == ShenandoahOopStore) {
@@ -1156,7 +1136,7 @@ void ShenandoahBarrierNode::verify(RootNode* root) {
 
         bool mark_inputs = false;
         if (in1->bottom_type() == TypePtr::NULL_PTR || in2->bottom_type() == TypePtr::NULL_PTR ||
-            ((in1->is_Con() || in2->is_Con()) && !ShenandoahBarriersForConst)) {
+            (in1->is_Con() || in2->is_Con())) {
           if (trace) {tty->print_cr("Comparison against a constant");}
           mark_inputs = true;
         } else if ((in1->is_CheckCastPP() && in1->in(1)->is_Proj() && in1->in(1)->in(0)->is_Allocate()) ||
@@ -1860,85 +1840,6 @@ Node* ShenandoahBarrierNode::dom_mem(Node* mem, Node* ctrl, int alias, Node*& me
   return mem;
 }
 
-const TypePtr* ShenandoahBarrierNode::fix_addp_type(const TypePtr* res, Node* base) {
-  if (UseShenandoahGC && ShenandoahBarriersForConst) {
-    // With barriers on constant oops, if a field being accessed is a
-    // static field, correct alias analysis requires that we look
-    // beyond the barriers (that hide the constant) to find the actual
-    // java class mirror constant.
-    const TypeInstPtr* ti = res->isa_instptr();
-    if (ti != NULL &&
-        ti->const_oop() == NULL &&
-        ti->klass() == ciEnv::current()->Class_klass() &&
-        ti->offset() >= (ti->klass()->as_instance_klass()->size_helper() * wordSize)) {
-      ResourceMark rm;
-      Unique_Node_List wq;
-      ciObject* const_oop = NULL;
-      wq.push(base);
-      for (uint i = 0; i < wq.size(); i++) {
-        Node *n = wq.at(i);
-        if (n->is_ShenandoahBarrier() ||
-            (n->is_Mach() && n->as_Mach()->ideal_Opcode() == Op_ShenandoahReadBarrier)) {
-          Node* m = n->in(ShenandoahBarrierNode::ValueIn);
-          if (m != NULL) {
-            wq.push(m);
-          }
-        } else if (n->is_Phi()) {
-          for (uint j = 1; j < n->req(); j++) {
-            Node* m = n->in(j);
-            if (m != NULL) {
-              wq.push(m);
-            }
-          }
-        } else if (n->is_ConstraintCast() || (n->is_Mach() && n->as_Mach()->ideal_Opcode() == Op_CheckCastPP) ||
-                   n->Opcode() == Op_ShenandoahEnqueueBarrier || n->is_MachSpillCopy()) {
-          assert(n->Opcode() != Op_ShenandoahEnqueueBarrier, "");
-          Node* m = n->in(1);
-          if (m != NULL) {
-            wq.push(m);
-          }
-        } else {
-          const TypeInstPtr* tn = n->bottom_type()->isa_instptr();
-          if (tn != NULL) {
-            if (tn->const_oop() != NULL) {
-              if (const_oop == NULL) {
-                const_oop = tn->const_oop();
-              } else if (const_oop != tn->const_oop()) {
-                const_oop = NULL;
-                break;
-              }
-            } else {
-              if (n->is_Proj()) {
-                if (n->in(0)->Opcode() == Op_CallLeafNoFP) {
-                  if (!ShenandoahBarrierSetAssembler::is_shenandoah_wb_C_call(n->in(0)->as_Call()->entry_point())) {
-                    const_oop = NULL;
-                    break;
-                  }
-                } else if (n->in(0)->is_MachCallLeaf()) {
-                  if (!ShenandoahBarrierSetAssembler::is_shenandoah_wb_C_call(n->in(0)->as_MachCall()->entry_point())) {
-                    const_oop = NULL;
-                    break;
-                  }
-                }
-              } else {
-                fatal("2 different static fields being accessed with a single AddP");
-                const_oop = NULL;
-                break;
-              }
-            }
-          } else {
-            assert(n->bottom_type() == Type::TOP, "not an instance ptr?");
-          }
-        }
-      }
-      if (const_oop != NULL) {
-        res = ti->cast_to_const(const_oop);
-      }
-    }
-  }
-  return res;
-}
-
 static void disconnect_barrier_mem(Node* wb, PhaseIterGVN& igvn) {
   Node* mem_in = wb->in(ShenandoahBarrierNode::Memory);
   Node* proj = wb->find_out_with(Op_ShenandoahWBMemProj);
@@ -2598,8 +2499,9 @@ void ShenandoahWriteBarrierNode::test_heap_stable(Node* ctrl, Node* raw_mem, Nod
 
   gc_state = new LoadBNode(ctrl, raw_mem, gc_state_addr, gc_state_adr_type, TypeInt::BYTE, MemNode::unordered);
   phase->register_new_node(gc_state, ctrl);
-
-  Node* heap_stable_cmp = new CmpINode(gc_state, phase->igvn().zerocon(T_INT));
+  Node* heap_stable_and = new AndINode(gc_state, phase->igvn().intcon(ShenandoahHeap::HAS_FORWARDED));
+  phase->register_new_node(heap_stable_and, ctrl);
+  Node* heap_stable_cmp = new CmpINode(heap_stable_and, phase->igvn().zerocon(T_INT));
   phase->register_new_node(heap_stable_cmp, ctrl);
   Node* heap_stable_test = new BoolNode(heap_stable_cmp, BoolTest::ne);
   phase->register_new_node(heap_stable_test, ctrl);
@@ -2841,10 +2743,12 @@ void ShenandoahWriteBarrierNode::evacuation_in_progress(Node* c, Node* val, Node
   evacuation_in_progress_null_check(c, val, evacuation_iff, unc, unc_ctrl, unc_region, uses, phase);
 
   IdealLoopTree *loop = phase->get_loop(c);
+
+  // Important to perform resolve here, before doing cset check, because that would
+  // capture forwarded objects we do not need to evacuate again.
   Node* rbtrue = new ShenandoahReadBarrierNode(c, wb_mem, val);
   phase->register_new_node(rbtrue, c);
 
-  Node* in_cset_fast_test_failure = NULL;
   in_cset_fast_test(c, rbtrue, raw_mem, wb_mem, region, val_phi, mem_phi, raw_mem_phi, phase);
 
   // The slow path stub consumes and produces raw memory in addition
@@ -3289,7 +3193,7 @@ void ShenandoahWriteBarrierNode::move_heap_stable_test_out_of_loop(IfNode* iff, 
   Node* loop_head = loop->_head;
   Node* entry_c = loop_head->in(LoopNode::EntryControl);
 
-  Node* load = iff->in(1)->in(1)->in(1);
+  Node* load = iff->in(1)->in(1)->in(1)->in(1);
   assert(is_gc_state_load(load), "broken");
   if (!phase->is_dominator(load->in(0), entry_c)) {
     Node* mem_ctrl = NULL;
@@ -3307,9 +3211,9 @@ void ShenandoahWriteBarrierNode::merge_back_to_back_tests(Node* n, PhaseIdealLoo
     if (phase->can_split_if(n_ctrl)) {
       IfNode* dom_if = phase->idom(n_ctrl)->as_If();
       if (is_heap_stable_test(n)) {
-        Node* gc_state_load = n->in(1)->in(1)->in(1);
+        Node* gc_state_load = n->in(1)->in(1)->in(1)->in(1);
         assert(is_gc_state_load(gc_state_load), "broken");
-        Node* dom_gc_state_load = dom_if->in(1)->in(1)->in(1);
+        Node* dom_gc_state_load = dom_if->in(1)->in(1)->in(1)->in(1);
         assert(is_gc_state_load(dom_gc_state_load), "broken");
         if (gc_state_load != dom_gc_state_load) {
           phase->igvn().replace_node(gc_state_load, dom_gc_state_load);
@@ -3558,7 +3462,7 @@ int ShenandoahEnqueueBarrierNode::needed(Node* n) {
   if (n == NULL ||
       n->is_Allocate() ||
       n->bottom_type() == TypePtr::NULL_PTR ||
-      n->bottom_type()->make_oopptr() != NULL && n->bottom_type()->make_oopptr()->const_oop() != NULL && !ShenandoahBarriersForConst) {
+      n->bottom_type()->make_oopptr() != NULL && n->bottom_type()->make_oopptr()->const_oop() != NULL) {
     return NotNeeded;
   }
   if (n->is_Phi() ||
@@ -3574,7 +3478,7 @@ Node* ShenandoahEnqueueBarrierNode::next(Node* n) {
       return n;
     } else if (n->bottom_type() == TypePtr::NULL_PTR) {
       return n;
-    } else if (n->bottom_type()->make_oopptr() != NULL && n->bottom_type()->make_oopptr()->const_oop() != NULL && !ShenandoahBarriersForConst) {
+    } else if (n->bottom_type()->make_oopptr() != NULL && n->bottom_type()->make_oopptr()->const_oop() != NULL) {
       return n;
     } else if (n->is_ConstraintCast() ||
                n->Opcode() == Op_DecodeN ||

@@ -96,10 +96,10 @@ public:
   void clear_claim_codecache();
 
   template<class T, UpdateRefsMode UPDATE_REFS>
-  static inline void mark_through_ref(T* p, ShenandoahHeap* heap, ShenandoahObjToScanQueue* q);
+  static inline void mark_through_ref(T* p, ShenandoahHeap* heap, ShenandoahObjToScanQueue* q, ShenandoahMarkingContext* const mark_context);
 
   template<class T, UpdateRefsMode UPDATE_REFS, bool STRING_DEDUP>
-  static inline void mark_through_ref(T* p, ShenandoahHeap* heap, ShenandoahObjToScanQueue* q);
+  static inline void mark_through_ref(T* p, ShenandoahHeap* heap, ShenandoahObjToScanQueue* q, ShenandoahMarkingContext* const mark_context);
 
   void mark_from_roots();
 
@@ -131,13 +131,6 @@ private:
 
   void weak_refs_work(bool full_gc);
   void weak_refs_work_doit(bool full_gc);
-
-#if TASKQUEUE_STATS
-  static void print_taskqueue_stats_hdr(outputStream* const st);
-  void print_taskqueue_stats() const;
-  void reset_taskqueue_stats();
-#endif // TASKQUEUE_STATS
-
 };
 
 #endif // SHARE_VM_GC_SHENANDOAH_SHENANDOAHCONCURRENTMARK_HPP
