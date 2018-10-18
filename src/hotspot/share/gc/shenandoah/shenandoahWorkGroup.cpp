@@ -23,22 +23,26 @@
 
 #include "precompiled.hpp"
 
-#include "gc/shenandoah/shenandoahHeap.hpp"
+#include "gc/shenandoah/shenandoahHeap.inline.hpp"
 #include "gc/shenandoah/shenandoahThreadLocalData.hpp"
 #include "gc/shenandoah/shenandoahWorkGroup.hpp"
 #include "gc/shenandoah/shenandoahTaskqueue.hpp"
 
 #include "logging/log.hpp"
 
-ShenandoahWorkerScope::ShenandoahWorkerScope(WorkGang* workers, uint nworkers, const char* msg) :
-  _n_workers(nworkers),
+ShenandoahWorkerScope::ShenandoahWorkerScope(WorkGang* workers, uint nworkers, const char* msg, bool check) :
   _workers(workers) {
   assert(msg != NULL, "Missing message");
-  log_info(gc, task)("Using %u of %u workers for %s",
-    nworkers, ShenandoahHeap::heap()->max_workers(), msg);
 
-  ShenandoahHeap::heap()->assert_gc_workers(nworkers);
-  _workers->update_active_workers(nworkers);
+  _n_workers = _workers->update_active_workers(nworkers);
+  assert(_n_workers <= nworkers, "Must be");
+
+  log_info(gc, task)("Using %u of %u workers for %s",
+    _n_workers, ShenandoahHeap::heap()->max_workers(), msg);
+
+  if (check) {
+    ShenandoahHeap::heap()->assert_gc_workers(_n_workers);
+  }
 }
 
 ShenandoahWorkerScope::~ShenandoahWorkerScope() {
@@ -47,14 +51,14 @@ ShenandoahWorkerScope::~ShenandoahWorkerScope() {
 }
 
 ShenandoahPushWorkerScope::ShenandoahPushWorkerScope(WorkGang* workers, uint nworkers, bool check) :
-  _n_workers(nworkers),
   _old_workers(workers->active_workers()),
   _workers(workers) {
-  _workers->update_active_workers(nworkers);
+  _n_workers = _workers->update_active_workers(nworkers);
+  assert(_n_workers <= nworkers, "Must be");
 
   // bypass concurrent/parallel protocol check for non-regular paths, e.g. verifier, etc.
   if (check) {
-    ShenandoahHeap::heap()->assert_gc_workers(nworkers);
+    ShenandoahHeap::heap()->assert_gc_workers(_n_workers);
   }
 }
 
@@ -62,28 +66,18 @@ ShenandoahPushWorkerScope::~ShenandoahPushWorkerScope() {
   assert(_workers->active_workers() == _n_workers,
     "Active workers can not be changed within this scope");
   // Restore old worker value
-  _workers->update_active_workers(_old_workers);
+  uint nworkers = _workers->update_active_workers(_old_workers);
+  assert(nworkers == _old_workers, "Must be able to restore");
 }
 
 ShenandoahPushWorkerQueuesScope::ShenandoahPushWorkerQueuesScope(WorkGang* workers, ShenandoahObjToScanQueueSet* queues, uint nworkers, bool check) :
-  _n_workers(nworkers),
-  _old_workers(workers->active_workers()),
-  _workers(workers),
-  _queues(queues) {
-  _workers->update_active_workers(nworkers);
-  _queues->reserve(nworkers);
-  // bypass concurrent/parallel protocol check for non-regular paths, e.g. verifier, etc.
-  if (check) {
-    ShenandoahHeap::heap()->assert_gc_workers(nworkers);
-  }
+  ShenandoahPushWorkerScope(workers, nworkers, check), _queues(queues) {
+  _queues->reserve(_n_workers);
 }
 
 ShenandoahPushWorkerQueuesScope::~ShenandoahPushWorkerQueuesScope() {
-  assert(_workers->active_workers() == _n_workers,
-    "Active workers can not be changed within this scope");
   // Restore old worker value
   _queues->reserve(_old_workers);
-  _workers->update_active_workers(_old_workers);
 }
 
 AbstractGangWorker* ShenandoahWorkGang::install_worker(uint which) {

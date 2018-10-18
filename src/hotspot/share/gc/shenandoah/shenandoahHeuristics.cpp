@@ -22,6 +22,7 @@
  */
 
 #include "precompiled.hpp"
+
 #include "gc/shenandoah/brooksPointer.hpp"
 #include "gc/shenandoah/shenandoahCollectionSet.inline.hpp"
 #include "gc/shenandoah/shenandoahCollectorPolicy.hpp"
@@ -29,6 +30,8 @@
 #include "gc/shenandoah/shenandoahHeapRegion.hpp"
 #include "gc/shenandoah/shenandoahHeuristics.hpp"
 #include "gc/shenandoah/shenandoahMarkingContext.inline.hpp"
+#include "logging/log.hpp"
+#include "logging/logTag.hpp"
 
 int ShenandoahHeuristics::compare_by_garbage(RegionData a, RegionData b) {
   if (a._garbage > b._garbage)
@@ -58,26 +61,20 @@ int ShenandoahHeuristics::compare_by_alloc_seq_descending(RegionData a, RegionDa
   return -compare_by_alloc_seq_ascending(a, b);
 }
 
-int ShenandoahHeuristics::compare_by_connects(RegionConnections a, RegionConnections b) {
-  if (a._connections == b._connections)
-    return 0;
-  else if (a._connections < b._connections)
-    return -1;
-  else return 1;
-}
-
 ShenandoahHeuristics::ShenandoahHeuristics() :
   _update_refs_early(false),
   _update_refs_adaptive(false),
   _region_data(NULL),
   _region_data_size(0),
-  _region_connects(NULL),
-  _region_connects_size(0),
   _degenerated_cycles_in_a_row(0),
   _successful_cycles_in_a_row(0),
   _bytes_in_cset(0),
-  _last_cycle_end(0) {
-
+  _cycle_start(os::elapsedTime()),
+  _last_cycle_end(0),
+  _gc_times_learned(0),
+  _gc_time_penalties(0),
+  _gc_time_history(new TruncatedSeq(5))
+{
   if (strcmp(ShenandoahUpdateRefsEarly, "on") == 0 ||
       strcmp(ShenandoahUpdateRefsEarly, "true") == 0 ) {
     _update_refs_early = true;
@@ -101,9 +98,6 @@ ShenandoahHeuristics::~ShenandoahHeuristics() {
   if (_region_data != NULL) {
     FREE_C_HEAP_ARRAY(RegionGarbage, _region_data);
   }
-  if (_region_connects != NULL) {
-    FREE_C_HEAP_ARRAY(RegionConnections, _region_connects);
-  }
 }
 
 ShenandoahHeuristics::RegionData* ShenandoahHeuristics::get_region_data_cache(size_t num) {
@@ -118,29 +112,6 @@ ShenandoahHeuristics::RegionData* ShenandoahHeuristics::get_region_data_cache(si
     _region_data_size = num;
   }
   return res;
-}
-
-ShenandoahHeuristics::RegionConnections* ShenandoahHeuristics::get_region_connects_cache(size_t num) {
-  RegionConnections* res = _region_connects;
-  if (res == NULL) {
-    res = NEW_C_HEAP_ARRAY(RegionConnections, num, mtGC);
-    _region_connects = res;
-    _region_connects_size = num;
-  } else if (_region_connects_size < num) {
-    res = REALLOC_C_HEAP_ARRAY(RegionConnections, _region_connects, num, mtGC);
-    _region_connects = res;
-    _region_connects_size = num;
-  }
-  return res;
-}
-
-bool ShenandoahHeuristics::maybe_add_heap_region(ShenandoahHeapRegion* hr,
-                                                 ShenandoahCollectionSet* collection_set) {
-  if (hr->is_regular() && hr->has_live() && !collection_set->is_in(hr)) {
-    collection_set->add_region(hr);
-    return true;
-  }
-  return false;
 }
 
 void ShenandoahHeuristics::choose_collection_set(ShenandoahCollectionSet* collection_set) {
@@ -180,7 +151,7 @@ void ShenandoahHeuristics::choose_collection_set(ShenandoahCollectionSet* collec
         // We can recycle it right away and put it in the free set.
         immediate_regions++;
         immediate_garbage += garbage;
-        region->make_trash();
+        region->make_trash_immediate();
       } else {
         // This is our candidate for later consideration.
         candidates[cand_idx]._region = region;
@@ -233,15 +204,15 @@ void ShenandoahHeuristics::choose_collection_set(ShenandoahCollectionSet* collec
 }
 
 void ShenandoahHeuristics::record_gc_start() {
-  ShenandoahHeap::heap()->set_alloc_seq_gc_start();
+  // Do nothing
 }
 
 void ShenandoahHeuristics::record_gc_end() {
-  ShenandoahHeap::heap()->set_alloc_seq_gc_end();
+  // Do nothing
 }
 
 void ShenandoahHeuristics::record_cycle_start() {
-  // Do nothing
+  _cycle_start = os::elapsedTime();
 }
 
 void ShenandoahHeuristics::record_cycle_end() {
@@ -249,10 +220,6 @@ void ShenandoahHeuristics::record_cycle_end() {
 }
 
 void ShenandoahHeuristics::record_phase_time(ShenandoahPhaseTimings::Phase phase, double secs) {
-  // Do nothing
-}
-
-void ShenandoahHeuristics::print_thresholds() {
   // Do nothing
 }
 
@@ -264,14 +231,14 @@ bool ShenandoahHeuristics::should_start_normal_gc() const {
   double last_time_ms = (os::elapsedTime() - _last_cycle_end) * 1000;
   bool periodic_gc = (last_time_ms > ShenandoahGuaranteedGCInterval);
   if (periodic_gc) {
-    log_info(gc,ergo)("Periodic GC triggered. Time since last GC: %.0f ms, Guaranteed Interval: " UINTX_FORMAT " ms",
-                      last_time_ms, ShenandoahGuaranteedGCInterval);
+    log_info(gc)("Trigger: Time since last GC (%.0f ms) is larger than guaranteed interval (" UINTX_FORMAT " ms)",
+                  last_time_ms, ShenandoahGuaranteedGCInterval);
   }
   return periodic_gc;
 }
 
-ShenandoahHeap::GCCycleMode ShenandoahHeuristics::should_start_traversal_gc() {
-  return ShenandoahHeap::NONE;
+bool ShenandoahHeuristics::should_start_traversal_gc() {
+  return false;
 }
 
 bool ShenandoahHeuristics::can_do_traversal_gc() {
@@ -285,16 +252,22 @@ bool ShenandoahHeuristics::should_degenerate_cycle() {
 void ShenandoahHeuristics::record_success_concurrent() {
   _degenerated_cycles_in_a_row = 0;
   _successful_cycles_in_a_row++;
+
+  _gc_time_history->add(time_since_last_gc());
+  _gc_times_learned++;
+  _gc_time_penalties -= MIN2<size_t>(_gc_time_penalties, Concurrent_Adjust);
 }
 
 void ShenandoahHeuristics::record_success_degenerated() {
   _degenerated_cycles_in_a_row++;
   _successful_cycles_in_a_row = 0;
+  _gc_time_penalties += Degenerated_Penalty;
 }
 
 void ShenandoahHeuristics::record_success_full() {
   _degenerated_cycles_in_a_row = 0;
   _successful_cycles_in_a_row++;
+  _gc_time_penalties += Full_Penalty;
 }
 
 void ShenandoahHeuristics::record_allocation_failure_gc() {
@@ -303,22 +276,22 @@ void ShenandoahHeuristics::record_allocation_failure_gc() {
 
 void ShenandoahHeuristics::record_explicit_gc() {
   _bytes_in_cset = 0;
-}
 
-void ShenandoahHeuristics::record_peak_occupancy() {
-  // Nothing to do by default.
+  // Assume users call System.gc() when external state changes significantly,
+  // which forces us to re-learn the GC timings and allocation rates.
+  _gc_times_learned = 0;
 }
 
 bool ShenandoahHeuristics::should_process_references() {
   if (ShenandoahRefProcFrequency == 0) return false;
-  size_t cycle = ShenandoahHeap::heap()->shenandoahPolicy()->cycle_counter();
+  size_t cycle = ShenandoahHeap::heap()->shenandoah_policy()->cycle_counter();
   // Process references every Nth GC cycle.
   return cycle % ShenandoahRefProcFrequency == 0;
 }
 
 bool ShenandoahHeuristics::should_unload_classes() {
   if (ShenandoahUnloadClassesFrequency == 0) return false;
-  size_t cycle = ShenandoahHeap::heap()->shenandoahPolicy()->cycle_counter();
+  size_t cycle = ShenandoahHeap::heap()->shenandoah_policy()->cycle_counter();
   // Unload classes every Nth GC cycle.
   // This should not happen in the same cycle as process_references to amortize costs.
   // Offsetting by one is enough to break the rendezvous when periods are equal.
@@ -328,4 +301,8 @@ bool ShenandoahHeuristics::should_unload_classes() {
 
 void ShenandoahHeuristics::initialize() {
   // Nothing to do by default.
+}
+
+double ShenandoahHeuristics::time_since_last_gc() const {
+  return os::elapsedTime() - _cycle_start;
 }

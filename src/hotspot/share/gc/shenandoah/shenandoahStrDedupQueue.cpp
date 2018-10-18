@@ -31,6 +31,7 @@
 #include "gc/shenandoah/shenandoahStringDedup.hpp"
 #include "logging/log.hpp"
 #include "runtime/mutex.hpp"
+#include "runtime/mutexLocker.hpp"
 
 ShenandoahStrDedupQueue::ShenandoahStrDedupQueue() :
   _consumer_queue(NULL),
@@ -41,7 +42,6 @@ ShenandoahStrDedupQueue::ShenandoahStrDedupQueue() :
   _max_free_buffer(ShenandoahHeap::heap()->max_workers() * 2),
   _cancel(false),
   _total_buffers(0) {
-  ShenandoahHeap* heap = ShenandoahHeap::heap();
   _producer_queues = NEW_C_HEAP_ARRAY(ShenandoahQueueBuffer*, _num_producer_queue, mtGC);
   for (size_t index = 0; index < _num_producer_queue; index ++) {
     _producer_queues[index] = NULL;
@@ -171,7 +171,6 @@ bool ShenandoahStrDedupQueue::pop_candidate(oop& obj) {
   return suc;
 }
 
-
 ShenandoahQueueBuffer* ShenandoahStrDedupQueue::new_buffer() {
   assert_lock_strong(StringDedupQueue_lock);
   if (_free_list != NULL) {
@@ -211,7 +210,6 @@ void ShenandoahStrDedupQueue::print_statistics_impl() {
     _total_buffers, (_total_buffers * sizeof(ShenandoahQueueBuffer) / K), _num_free_buffer);
 }
 
-
 class VerifyQueueClosure : public OopClosure {
 private:
   ShenandoahHeap* _heap;
@@ -230,9 +228,8 @@ VerifyQueueClosure::VerifyQueueClosure() :
 
 void VerifyQueueClosure::do_oop(oop* o) {
   if (*o != NULL) {
-    assert(!_heap->is_in((void*)o), "off heap location");
     oop obj = *o;
-    assert(_heap->is_in(obj), "Object must be on the heap");
+    shenandoah_assert_correct(o, obj);
     assert(java_lang_String::is_instance(obj), "Object must be a String");
   }
 }
@@ -247,6 +244,3 @@ void ShenandoahStrDedupQueue::verify_impl() {
     }
   }
 }
-
-
-

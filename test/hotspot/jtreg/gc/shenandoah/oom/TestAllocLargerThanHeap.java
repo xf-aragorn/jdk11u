@@ -31,7 +31,6 @@
 import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.process.ProcessTools;
 
-
 public class TestAllocLargerThanHeap {
 
     static final int SIZE  = 16*1024*1024;
@@ -51,6 +50,7 @@ public class TestAllocLargerThanHeap {
         {
             ProcessBuilder pb = ProcessTools.createJavaProcessBuilder(
                                     "-Xmx16m",
+                                    "-XX:+UnlockExperimentalVMOptions",
                                     "-XX:+UseShenandoahGC",
                                     TestAllocLargerThanHeap.class.getName(),
                                     "test");
@@ -63,6 +63,7 @@ public class TestAllocLargerThanHeap {
         {
             ProcessBuilder pb = ProcessTools.createJavaProcessBuilder(
                                     "-Xmx1g",
+                                    "-XX:+UnlockExperimentalVMOptions",
                                     "-XX:+UseShenandoahGC",
                                     TestAllocLargerThanHeap.class.getName(),
                                     "test");

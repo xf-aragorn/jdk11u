@@ -21,7 +21,6 @@
  *
  */
 
-
 #include "precompiled.hpp"
 #include "code/codeCache.hpp"
 #include "code/nmethod.hpp"
@@ -29,13 +28,79 @@
 #include "gc/shenandoah/shenandoahHeap.inline.hpp"
 #include "gc/shenandoah/shenandoahCodeRoots.hpp"
 
+ShenandoahParallelCodeCacheIterator::ShenandoahParallelCodeCacheIterator(const GrowableArray<CodeHeap*>* heaps) {
+  _length = heaps->length();
+  _iters = NEW_C_HEAP_ARRAY(ShenandoahParallelCodeHeapIterator, _length, mtGC);
+  for (int h = 0; h < _length; h++) {
+    _iters[h] = ShenandoahParallelCodeHeapIterator(heaps->at(h));
+  }
+}
+
+ShenandoahParallelCodeCacheIterator::~ShenandoahParallelCodeCacheIterator() {
+  FREE_C_HEAP_ARRAY(ParallelCodeHeapIterator, _iters);
+}
+
+void ShenandoahParallelCodeCacheIterator::parallel_blobs_do(CodeBlobClosure* f) {
+  for (int c = 0; c < _length; c++) {
+    _iters[c].parallel_blobs_do(f);
+  }
+}
+
+ShenandoahParallelCodeHeapIterator::ShenandoahParallelCodeHeapIterator(CodeHeap* heap) :
+        _heap(heap), _claimed_idx(0), _finished(false) {
+}
+
+void ShenandoahParallelCodeHeapIterator::parallel_blobs_do(CodeBlobClosure* f) {
+  assert(SafepointSynchronize::is_at_safepoint(), "Must be at safepoint");
+
+  /*
+   * Parallel code heap walk.
+   *
+   * This code makes all threads scan all code heaps, but only one thread would execute the
+   * closure on given blob. This is achieved by recording the "claimed" blocks: if a thread
+   * had claimed the block, it can process all blobs in it. Others have to fast-forward to
+   * next attempt without processing.
+   *
+   * Late threads would return immediately if iterator is finished.
+   */
+
+  if (_finished) {
+    return;
+  }
+
+  int stride = 256; // educated guess
+  int stride_mask = stride - 1;
+  assert (is_power_of_2(stride), "sanity");
+
+  int count = 0;
+  bool process_block = true;
+
+  for (CodeBlob *cb = CodeCache::first_blob(_heap); cb != NULL; cb = CodeCache::next_blob(_heap, cb)) {
+    int current = count++;
+    if ((current & stride_mask) == 0) {
+      process_block = (current >= _claimed_idx) &&
+                      (Atomic::cmpxchg(current + stride, &_claimed_idx, current) == current);
+    }
+    if (process_block) {
+      if (cb->is_alive()) {
+        f->do_code_blob(cb);
+#ifdef ASSERT
+        if (cb->is_nmethod())
+          Universe::heap()->verify_nmethod((nmethod*)cb);
+#endif
+      }
+    }
+  }
+
+  _finished = true;
+}
+
 class ShenandoahNMethodOopDetector : public OopClosure {
 private:
-  ShenandoahHeap* _heap;
   GrowableArray<oop*> _oops;
 
 public:
-  ShenandoahNMethodOopDetector() : _heap(ShenandoahHeap::heap()), _oops(10) {};
+  ShenandoahNMethodOopDetector() : _oops(10) {};
 
   void do_oop(oop* o) {
     _oops.append(o);
@@ -68,7 +133,7 @@ private:
       oop obj1 = CompressedOops::decode_not_null(o);
       oop obj2 = ShenandoahBarrierSet::barrier_set()->write_barrier(obj1);
       if (! oopDesc::unsafe_equals(obj1, obj2)) {
-        assert (!_heap->in_collection_set(obj2), "sanity");
+        shenandoah_assert_not_in_cset(NULL, obj2);
         RawAccess<IS_NOT_NULL>::oop_store(p, obj2);
         if (_heap->is_concurrent_traversal_in_progress()) {
           ShenandoahBarrierSet::barrier_set()->enqueue(obj2);
@@ -162,8 +227,10 @@ void ShenandoahCodeRoots::remove_nmethod(nmethod* nm) {
 
 ShenandoahCodeRootsIterator::ShenandoahCodeRootsIterator() :
         _heap(ShenandoahHeap::heap()),
-        _par_iterator(CodeCache::parallel_iterator()),
+        _par_iterator(CodeCache::heaps()),
         _claimed(0) {
+  assert(SafepointSynchronize::is_at_safepoint(), "Must be at safepoint");
+  assert(!Thread::current()->is_Worker_thread(), "Should not be acquired by workers");
   switch (ShenandoahCodeRootsStyle) {
     case 0:
     case 1: {
@@ -292,9 +359,10 @@ void ShenandoahNMethod::assert_alive_and_correct() {
   assert(_oops_count > 0, "should have filtered nmethods without oops before");
   ShenandoahHeap* heap = ShenandoahHeap::heap();
   for (int c = 0; c < _oops_count; c++) {
-    oop o = RawAccess<>::oop_load(_oops[c]);
-    shenandoah_assert_correct_except(NULL, o, o == NULL || heap->is_full_gc_move_in_progress());
-    assert(_nm->code_contains((address)_oops[c]) || _nm->oops_contains(_oops[c]), "nmethod should contain the oop*");
+    oop *loc = _oops[c];
+    assert(_nm->code_contains((address) loc) || _nm->oops_contains(loc), "nmethod should contain the oop*");
+    oop o = RawAccess<>::oop_load(loc);
+    shenandoah_assert_correct_except(loc, o, o == NULL || heap->is_full_gc_move_in_progress());
   }
 }
 

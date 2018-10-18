@@ -87,12 +87,6 @@
           " *) compact - run GC with lower footprint target, may end up "   \
           "               doing continuous GC, evacuate lots of live "      \
           "               objects, uncommit heap aggressively;"             \
-          " *) connected - run partial cycles focusing on least connected " \
-          "               regions, along with adaptive concurrent GC;"      \
-          " *) generational - run partial cycles focusing on young regions,"\
-          "               along with adaptive concurrent GC), "             \
-          " *) LRU - run partial cycles focusing on old regions, along"     \
-          "               with adaptive concurrent GC."                     \
           "Defaults to adaptive")                                           \
                                                                             \
   experimental(ccstr, ShenandoahUpdateRefsEarly, "adaptive",                \
@@ -140,18 +134,6 @@
           "(ignored otherwise). Defauls to 0%.")                            \
           range(0,100)                                                      \
                                                                             \
-  product_rw(uintx, ShenandoahGenerationalYoungGenPercentage, 20,           \
-             "Percentage of the heap designated as young")                  \
-          range(0,100)                                                      \
-                                                                            \
-  product_rw(uintx, ShenandoahLRUOldGenPercentage, 20,                      \
-             "Percentage of the heap designated as old")                    \
-          range(0,100)                                                      \
-                                                                            \
-  product_rw(uintx, ShenandoahConnectednessPercentage, 20,                  \
-             "Percentage of the heap designated for connectedness")         \
-          range(0,100)                                                      \
-                                                                            \
   experimental(uintx, ShenandoahMergeUpdateRefsMinGap, 100,                 \
                "If GC is currently running in separate update-refs mode "   \
                "this numbers gives the threshold when to switch to "        \
@@ -166,17 +148,46 @@
                "to duration(marking)+duration(update-refs).")               \
           writeable(Always)                                                 \
                                                                             \
-  experimental(uintx, ShenandoahInitFreeThreshold, 30,                      \
-               "Initial remaining free threshold for adaptive heuristics")  \
+  experimental(uintx, ShenandoahInitFreeThreshold, 70,                      \
+               "Initial remaining free threshold for learning steps in "    \
+               "heuristics. In percents of total heap size.")               \
           range(0,100)                                                      \
                                                                             \
   experimental(uintx, ShenandoahMinFreeThreshold, 10,                       \
                "Minimum remaining free threshold for adaptive heuristics")  \
           range(0,100)                                                      \
                                                                             \
-  experimental(uintx, ShenandoahMaxFreeThreshold, 70,                       \
-               "Maximum remaining free threshold for adaptive heuristics")  \
+  experimental(uintx, ShenandoahLearningSteps, 5,                           \
+               "Number of GC cycles to run in order to learn application "  \
+               "and GC performance for adaptive heuristics.")               \
           range(0,100)                                                      \
+                                                                            \
+  experimental(uintx, ShenandoahAllocSpikeFactor, 5,                        \
+               "The amount of heap space to reserve for absorbing the "     \
+               "allocation spikes. Larger value wastes more memory in "     \
+               "non-emergency cases, but provides more safety in emergency "\
+               "cases. In percents of total heap size.")                    \
+          range(0,100)                                                      \
+                                                                            \
+  experimental(uintx, ShenandoahEvacReserve, 5,                             \
+               "Maximum amount of free space to reserve for evacuation. "   \
+               "Larger values make GC more aggressive, while leaving less " \
+               "headroom for application to allocate in. "                  \
+               "In percents of free space available.")                      \
+          range(1,100)                                                      \
+                                                                            \
+  experimental(double, ShenandoahEvacWaste, 1.2,                            \
+               "How much waste evacuations produce within the reserved "    \
+               "space. Larger values make evacuations more resilient "      \
+               "against allocation failures, at expense of smaller csets "  \
+               "on each cycle.")                                            \
+          range(1,100)                                                      \
+                                                                            \
+  experimental(bool, ShenandoahEvacReserveOverflow, true,                   \
+               "Allow evacuations to overflow the reserved space. "         \
+               "Enabling it will make evacuations more resilient when "     \
+               "evacuation reserve/waste is incorrect, at the risk that "   \
+               "application allocations run out of memory too early.")      \
                                                                             \
   experimental(uintx, ShenandoahImmediateThreshold, 90,                     \
                "If mark identifies more than this much immediate garbage "  \
@@ -195,11 +206,6 @@
   experimental(uintx, ShenandoahHappyCyclesThreshold, 3,                    \
           "How many successful marking cycles before improving free "       \
                "threshold for adaptive heuristics")                         \
-                                                                            \
-  experimental(uintx, ShenandoahPartialInboundThreshold, 10,                \
-          "Specifies how many inbound regions a region can have maximum "   \
-          "to be considered for collection set in partial collections.")    \
-          writeable(Always)                                                 \
                                                                             \
   experimental(uintx, ShenandoahMarkLoopStride, 1000,                       \
           "How many items are processed during one marking step")           \
@@ -237,9 +243,6 @@
   experimental(bool, ShenandoahLoopOptsAfterExpansion, true,                \
           "Attempt more loop opts after write barrier expansion")           \
                                                                             \
-  experimental(bool, UseShenandoahOWST, true,                               \
-          "Use Shenandoah work stealing termination protocol")              \
-                                                                            \
   experimental(size_t, ShenandoahSATBBufferSize, 1 * K,                     \
           "Number of entries in an SATB log buffer.")                       \
           range(1, max_uintx)                                               \
@@ -253,13 +256,7 @@
           "Turns on heap region sampling via JVMStat")                      \
            writeable(Always)                                                \
                                                                             \
-  experimental(bool, ShenandoahFastSyncRoots, true,                         \
-          "Enable fast synchronizer roots scanning")                        \
-                                                                            \
-  experimental(bool, ShenandoahMergeSafepointCleanup, false,                \
-              "Do safepoint cleanup piggy-backed on thread scans")          \
-                                                                            \
-  experimental(uint, ParallelSafepointCleanupThreads, 0,                    \
+  experimental(uint, ParallelSafepointCleanupThreads, 4,                    \
           "Number of parallel threads used for safepoint cleanup")          \
                                                                             \
   experimental(bool, ShenandoahPreclean, true,                              \
@@ -315,12 +312,6 @@
   diagnostic(bool, ShenandoahCloneBarrier, true,                            \
           "Turn on/off clone barriers in Shenandoah")                       \
                                                                             \
-  diagnostic(bool, UseShenandoahMatrix, false,                              \
-          "Turn on/off Shenandoah connection matrix collection")            \
-                                                                            \
-  diagnostic(bool, PrintShenandoahMatrix, false,                            \
-          "Print connection matrix after marking")                          \
-                                                                            \
   diagnostic(bool, ShenandoahStoreCheck, false,                             \
           "Emit additional code that checks objects are written to only"    \
           " in to-space")                                                   \
@@ -349,7 +340,7 @@
   experimental(bool, ShenandoahCommonGCStateLoads, false,                   \
          "Enable commonning for GC state loads in generated code.")         \
                                                                             \
-  develop(bool, VerifyStrictOopOperations, false,                           \
+  develop(bool, VerifyObjectEquals, false,                                  \
           "Verify that == and != are not used on oops. Only in fastdebug")  \
                                                                             \
   develop(bool, ShenandoahVerifyOptoBarriers, false,                        \
@@ -425,9 +416,6 @@
           "Allow mixing mutator and collector allocations in a single "     \
           "region")                                                         \
                                                                             \
-  diagnostic(bool, ShenandoahRecycleClearsBitmap, false,                    \
-          "Recycling a region also clears the marking bitmap")              \
-                                                                            \
   diagnostic(bool, ShenandoahTerminationTrace, false,                       \
           "Tracing task termination timings")                               \
                                                                             \
@@ -436,5 +424,8 @@
                                                                             \
   diagnostic(bool, ShenandoahCompileCheck, false,                           \
           "Assert that methods are successfully compilable")                \
+                                                                            \
+  experimental(bool, ShenandoahAlwaysClearSoftRefs, false,                  \
+          "Clear soft references unconditionally")                          \
 
 #endif // SHARE_VM_GC_SHENANDOAH_SHENANDOAH_GLOBALS_HPP

@@ -53,8 +53,6 @@ private:
 #endif
 
 public:
-
-public:
   enum { Control,
          Memory,
          ValueIn
@@ -127,7 +125,6 @@ protected:
 private:
   static bool needs_barrier_impl(PhaseGVN* phase, ShenandoahBarrierNode* orig, Node* n, Node* rb_mem, bool allow_fromspace, Unique_Node_List &visited);
 
-
   static bool dominates_memory(PhaseGVN* phase, Node* b1, Node* b2, bool linear);
   static bool dominates_memory_impl(PhaseGVN* phase, Node* b1, Node* b2, Node* current, bool linear);
 };
@@ -162,7 +159,6 @@ private:
 };
 
 class ShenandoahWriteBarrierNode : public ShenandoahBarrierNode {
-
 public:
   ShenandoahWriteBarrierNode(Compile* C, Node* ctrl, Node* mem, Node* obj);
 
@@ -182,7 +178,6 @@ public:
 
   static LoopNode* try_move_before_pre_loop(Node* c, Node* val_ctrl, PhaseIdealLoop* phase);
   static Node* move_above_predicates(LoopNode* cl, Node* val_ctrl, PhaseIdealLoop* phase);
-  static bool should_process_phi(Node* phi, int alias, Compile* C);
 #ifdef ASSERT
   static bool memory_dominates_all_paths(Node* mem, Node* rep_ctrl, int alias, PhaseIdealLoop* phase);
   static void memory_dominates_all_paths_helper(Node* c, Node* rep_ctrl, Unique_Node_List& controls, PhaseIdealLoop* phase);

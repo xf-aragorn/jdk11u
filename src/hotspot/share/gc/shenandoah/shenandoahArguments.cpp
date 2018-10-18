@@ -24,14 +24,14 @@
 
 #include "precompiled.hpp"
 #include "gc/shared/gcArguments.inline.hpp"
-#include "gc/shared/taskqueue.hpp"
 #include "gc/shenandoah/shenandoahArguments.hpp"
 #include "gc/shenandoah/shenandoahCollectorPolicy.hpp"
 #include "gc/shenandoah/shenandoahHeap.hpp"
+#include "gc/shenandoah/shenandoahHeapRegion.hpp"
+#include "gc/shenandoah/shenandoahTaskqueue.hpp"
 #include "utilities/defaultStream.hpp"
 
 void ShenandoahArguments::initialize() {
-
 #if !(defined AARCH64 || defined AMD64 || defined IA32)
   vm_exit_during_initialization("Shenandoah GC is not supported on this platform.");
 #endif
@@ -52,7 +52,6 @@ void ShenandoahArguments::initialize() {
   FLAG_SET_DEFAULT(ShenandoahCASBarrier,             false);
   FLAG_SET_DEFAULT(ShenandoahAcmpBarrier,            false);
   FLAG_SET_DEFAULT(ShenandoahCloneBarrier,           false);
-  FLAG_SET_DEFAULT(UseShenandoahMatrix,              false);
 #endif
 
 #ifdef _LP64
@@ -65,6 +64,12 @@ void ShenandoahArguments::initialize() {
     vm_exit(1);
   }
 #endif
+
+  if (UseLargePages && (MaxHeapSize / os::large_page_size()) < ShenandoahHeapRegion::MIN_NUM_REGIONS) {
+    warning("Large pages size (" SIZE_FORMAT "K) is too large to afford page-sized regions, disabling uncommit",
+            os::large_page_size() / K);
+    FLAG_SET_DEFAULT(ShenandoahUncommit, false);
+  }
 
   FLAG_SET_DEFAULT(ParallelGCThreads,
                    Abstract_VM_Version::parallel_worker_threads());
@@ -178,14 +183,6 @@ void ShenandoahArguments::initialize() {
     FLAG_SET_DEFAULT(TLABAllocationWeight, 90);
   }
 
-  // Shenandoah needs more space in generated code to put barriers in.
-  // TODO: NMethodSizeLimit should not be develop.
-#ifdef ASSERT
-  if (FLAG_IS_DEFAULT(NMethodSizeLimit)) {
-    FLAG_SET_DEFAULT(NMethodSizeLimit, NMethodSizeLimit * 3);
-  }
-#endif
-
   // Shenandoah needs more C2 nodes to compile some methods with lots of barriers.
   // NodeLimitFudgeFactor needs to stay the same relative to MaxNodeLimit.
 #ifdef COMPILER2
@@ -194,10 +191,24 @@ void ShenandoahArguments::initialize() {
     FLAG_SET_DEFAULT(NodeLimitFudgeFactor, NodeLimitFudgeFactor * 3);
   }
 #endif
+
+  // Make sure safepoint deadlocks are failing predictably. This sets up VM to report
+  // fatal error after 10 seconds of wait for safepoint syncronization (not the VM
+  // operation itself). There is no good reason why Shenandoah would spend that
+  // much time synchronizing.
+#ifdef ASSERT
+  FLAG_SET_DEFAULT(SafepointTimeout, true);
+  FLAG_SET_DEFAULT(SafepointTimeoutDelay, 10000);
+  FLAG_SET_DEFAULT(DieOnSafepointTimeout, true);
+#endif
 }
 
 size_t ShenandoahArguments::conservative_max_heap_alignment() {
-  return ShenandoahMaxRegionSize;
+  size_t align = ShenandoahMaxRegionSize;
+  if (UseLargePages) {
+    align = MAX2(align, os::large_page_size());
+  }
+  return align;
 }
 
 CollectedHeap* ShenandoahArguments::create_heap() {

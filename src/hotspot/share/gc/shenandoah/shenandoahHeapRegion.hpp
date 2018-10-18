@@ -25,12 +25,14 @@
 #define SHARE_VM_GC_SHENANDOAH_SHENANDOAHHEAPREGION_HPP
 
 #include "gc/shared/space.hpp"
+#include "gc/shenandoah/shenandoahAllocRequest.hpp"
+#include "gc/shenandoah/shenandoahAsserts.hpp"
+#include "gc/shenandoah/shenandoahHeap.hpp"
+#include "gc/shenandoah/shenandoahPacer.hpp"
 #include "memory/universe.hpp"
 #include "utilities/sizes.hpp"
 
 class VMStructs;
-class ShenandoahHeap;
-class ShenandoahPacer;
 
 class ShenandoahHeapRegion : public ContiguousSpace {
   friend class VMStructs;
@@ -155,9 +157,6 @@ private:
 
   void report_illegal_transition(const char* method);
 
-  void make_idle();
-  void activate_region();
-
   bool can_idle_region() const;
 public:
   // Allowed transitions from the outside code:
@@ -171,6 +170,7 @@ public:
   void make_unpinned();
   void make_cset();
   void make_trash();
+  void make_trash_immediate();
   void make_empty();
   void make_uncommitted();
   void make_committed_bypass();
@@ -246,6 +246,8 @@ private:
 
 public:
   ShenandoahHeapRegion(ShenandoahHeap* heap, HeapWord* start, size_t size_words, size_t index, bool committed);
+
+  static const size_t MIN_NUM_REGIONS = 10;
 
   static void setup_sizes(size_t initial_heap_size, size_t max_heap_size);
 
@@ -333,16 +335,9 @@ public:
   size_t region_number() const;
 
   // Allocation (return NULL if full)
-  inline HeapWord* allocate(size_t word_size, ShenandoahHeap::AllocType type);
-  HeapWord* allocate(size_t word_size) {
-    // ContiguousSpace wants us to have this method. But it is an error to call this with Shenandoah.
-    ShouldNotCallThis();
-    return NULL;
-  }
+  inline HeapWord* allocate(size_t word_size, ShenandoahAllocRequest::Type type);
 
-  // Roll back the previous allocation of an object with specified size.
-  // Returns TRUE when successful, FALSE if not successful or not supported.
-  bool rollback_allocation(uint size);
+  HeapWord* allocate(size_t word_size) shenandoah_not_implemented_return(NULL)
 
   void clear_live_data();
   void set_live_data(size_t s);
@@ -367,25 +362,20 @@ public:
 
   HeapWord* block_start_const(const void* p) const;
 
-  // Just before GC we need to fill the current region.
-  void fill_region();
-
   bool in_collection_set() const;
 
   // Find humongous start region that this region belongs to
   ShenandoahHeapRegion* humongous_start_region() const;
 
-  virtual CompactibleSpace* next_compaction_space() const;
-
-  // Override for scan_and_forward support.
-  void prepare_for_compaction(CompactPoint* cp);
-  void adjust_pointers();
-  void compact();
+  CompactibleSpace* next_compaction_space() const shenandoah_not_implemented_return(NULL);
+  void prepare_for_compaction(CompactPoint* cp)   shenandoah_not_implemented;
+  void adjust_pointers()                          shenandoah_not_implemented;
+  void compact()                                  shenandoah_not_implemented;
 
   void set_new_top(HeapWord* new_top) { _new_top = new_top; }
   HeapWord* new_top() const { return _new_top; }
 
-  inline void adjust_alloc_metadata(ShenandoahHeap::AllocType type, size_t);
+  inline void adjust_alloc_metadata(ShenandoahAllocRequest::Type type, size_t);
   void reset_alloc_metadata_to_shared();
   void reset_alloc_metadata();
   size_t get_shared_allocs() const;

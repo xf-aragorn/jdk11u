@@ -24,10 +24,9 @@
 #ifndef SHARE_VM_GC_SHENANDOAH_SHENANDOAHSTRINGDEDUPQUEUE_HPP
 #define SHARE_VM_GC_SHENANDOAH_SHENANDOAHSTRINGDEDUPQUEUE_HPP
 
+#include "gc/shared/stringdedup/stringDedup.hpp"
 #include "gc/shenandoah/shenandoahHeap.hpp"
-#include "memory/iterator.hpp"
 #include "oops/oop.hpp"
-#include "runtime/mutex.hpp"
 
 template <uint buffer_size>
 class ShenandoahOopBuffer : public CHeapObj<mtGC> {
@@ -89,7 +88,6 @@ public:
   void push_impl(uint worker_id, oop string_oop);
   oop  pop_impl();
 
-
   void unlink_or_oops_do_impl(StringDedupUnlinkOrOopsDoClosure* cl, size_t queue);
 
   void print_statistics_impl();
@@ -101,7 +99,6 @@ protected:
 private:
   ShenandoahQueueBuffer* new_buffer();
 
-  void release_free_list();
   void release_buffers(ShenandoahQueueBuffer* list);
 
   ShenandoahQueueBuffer* queue_at(size_t queue_id) const;

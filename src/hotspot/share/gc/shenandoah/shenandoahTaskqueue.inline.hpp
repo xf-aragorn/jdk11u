@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2016, Red Hat, Inc. and/or its affiliates.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -21,19 +21,39 @@
  *
  */
 
-#include "precompiled.hpp"
-#include "gc/shenandoah/brooksPointer.hpp"
-#include "gc/shenandoah/shenandoahBarrierSet.inline.hpp"
+#ifndef SHARE_VM_GC_SHENANDOAH_SHENANDOAHTASKQUEUE_INLINE_HPP
+#define SHARE_VM_GC_SHENANDOAH_SHENANDOAHTASKQUEUE_INLINE_HPP
 
-#include "asm/macroAssembler.hpp"
-#include "interpreter/interpreter.hpp"
+#include "gc/shenandoah/shenandoahTaskqueue.hpp"
 
-#define __ masm->
+template <class E, MEMFLAGS F, unsigned int N>
+bool BufferedOverflowTaskQueue<E, F, N>::pop(E &t)
+{
+  if (!_buf_empty) {
+    t = _elem;
+    _buf_empty = true;
+    return true;
+  }
 
-#ifndef CC_INTERP
-void ShenandoahHeap::compile_prepare_oop(MacroAssembler* masm, Register obj) {
-  __ add(obj, obj, BrooksPointer::byte_size());
-  __ str(obj, Address(obj, BrooksPointer::byte_offset()));
+  if (taskqueue_t::pop_local(t)) {
+    return true;
+  }
+
+  return taskqueue_t::pop_overflow(t);
 }
 
-#endif
+template <class E, MEMFLAGS F, unsigned int N>
+inline bool BufferedOverflowTaskQueue<E, F, N>::push(E t)
+{
+  if (_buf_empty) {
+    _elem = t;
+    _buf_empty = false;
+  } else {
+    bool pushed = taskqueue_t::push(_elem);
+    assert(pushed, "overflow queue should always succeed pushing");
+    _elem = t;
+  }
+  return true;
+}
+
+#endif // SHARE_VM_GC_SHENANDOAH_SHENANDOAHTASKQUEUE_INLINE_HPP

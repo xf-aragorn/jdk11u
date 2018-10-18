@@ -397,7 +397,8 @@ void Compile::remove_useless_nodes(Unique_Node_List &useful) {
       record_for_igvn(n->unique_out());
     }
 #if INCLUDE_SHENANDOAHGC
-    if (n->Opcode() == Op_AddP && CallLeafNode::has_only_shenandoah_wb_pre_uses(n)) {
+    // TODO: Move into below eliminate_useless_gc_barriers(..) below
+    if (n->Opcode() == Op_AddP && ShenandoahBarrierSetC2::has_only_shenandoah_wb_pre_uses(n)) {
       for (DUIterator_Fast imax, i = n->fast_outs(imax); i < imax; i++) {
         record_for_igvn(n->fast_out(i));
       }
@@ -2412,7 +2413,7 @@ void Compile::Optimize() {
   print_method(PHASE_BEFORE_BARRIER_EXPAND, 2);
 
 #if INCLUDE_SHENANDOAHGC
-  if (!ShenandoahWriteBarrierNode::expand(this, igvn, loop_opts_cnt)) {
+  if (UseShenandoahGC && !ShenandoahWriteBarrierNode::expand(this, igvn, loop_opts_cnt)) {
     assert(failing(), "must bail out w/ explicit message");
     return;
   }
@@ -2848,12 +2849,12 @@ void Compile::final_graph_reshaping_impl( Node *n, Final_Reshape_Counts &frc) {
     assert (n->is_Call(), "");
     CallNode *call = n->as_Call();
 #if INCLUDE_SHENANDOAHGC
-    if (UseShenandoahGC && call->is_shenandoah_wb_pre_call()) {
+    if (UseShenandoahGC && ShenandoahBarrierSetC2::is_shenandoah_wb_pre_call(call)) {
       uint cnt = ShenandoahBarrierSetC2::write_ref_field_pre_entry_Type()->domain()->cnt();
       if (call->req() > cnt) {
         assert(call->req() == cnt+1, "only one extra input");
         Node* addp = call->in(cnt);
-        assert(!CallLeafNode::has_only_shenandoah_wb_pre_uses(addp), "useless address computation?");
+        assert(!ShenandoahBarrierSetC2::has_only_shenandoah_wb_pre_uses(addp), "useless address computation?");
         call->del_req(cnt);
       }
     }
@@ -3882,7 +3883,9 @@ void Compile::verify_barriers() {
             if (cmp->Opcode() == Op_CmpI && cmp->in(2)->is_Con() && cmp->in(2)->bottom_type()->is_int()->get_con() == 0
                 && cmp->in(1)->is_Load()) {
               LoadNode* load = cmp->in(1)->as_Load();
-              if (load->is_g1_marking_load()) {
+              if (load->Opcode() == Op_LoadB && load->in(2)->is_AddP() && load->in(2)->in(2)->Opcode() == Op_ThreadLocal
+                  && load->in(2)->in(3)->is_Con()
+                  && load->in(2)->in(3)->bottom_type()->is_intptr_t()->get_con() == marking_offset) {
 
                 Node* if_ctrl = iff->in(0);
                 Node* load_ctrl = load->in(0);
@@ -4601,7 +4604,7 @@ void Compile::remove_speculative_types(PhaseIterGVN &igvn) {
         const Type* t_no_spec = t->remove_speculative();
         if (t_no_spec != t) {
           bool in_hash = igvn.hash_delete(n);
-          assert(in_hash || n->hash() == Node::NO_HASH, "node should be in igvn hash table");
+          assert(in_hash || (UseShenandoahGC && n->hash() == Node::NO_HASH), "node should be in igvn hash table");
           tn->set_type(t_no_spec);
           igvn.hash_insert(n);
           igvn._worklist.push(n); // give it a chance to go away
@@ -4737,48 +4740,3 @@ void CloneMap::dump(node_idx_t key) const {
     ni.dump();
   }
 }
-
-#if INCLUDE_SHENANDOAHGC
-void Compile::shenandoah_eliminate_matrix_update(Node* p2x, PhaseIterGVN* igvn) {
-  assert(UseShenandoahGC && p2x->Opcode() == Op_CastP2X, "");
-  ResourceMark rm;
-  Unique_Node_List wq;
-
-  wq.push(p2x);
-  for (uint next = 0; next < wq.size(); next++) {
-    Node *n = wq.at(next);
-    if (n->is_Store()) {
-      // do nothing
-    } else if (n->is_Load()) {
-      igvn->replace_node(n, igvn->intcon(1));
-    } else {
-      for (DUIterator_Fast imax, i = n->fast_outs(imax); i < imax; i++) {
-        Node* u = n->fast_out(i);
-        wq.push(u);
-      }
-    }
-  }
-  igvn->replace_node(p2x, C->top());
-}
-
-void Compile::shenandoah_eliminate_wb_pre(Node* call, PhaseIterGVN* igvn) {
-  assert(UseShenandoahGC && call->is_shenandoah_wb_pre_call(), "");
-  Node* c = call->as_Call()->proj_out(TypeFunc::Control);
-  c = c->unique_ctrl_out();
-  assert(c->is_Region() && c->req() == 3, "where's the pre barrier control flow?");
-  c = c->unique_ctrl_out();
-  assert(c->is_Region() && c->req() == 3, "where's the pre barrier control flow?");
-  Node* iff = c->in(1)->is_IfProj() ? c->in(1)->in(0) : c->in(2)->in(0);
-  assert(iff->is_If(), "expect test");
-  if (!iff->is_shenandoah_marking_if(igvn)) {
-    c = c->unique_ctrl_out();
-    assert(c->is_Region() && c->req() == 3, "where's the pre barrier control flow?");
-    iff = c->in(1)->is_IfProj() ? c->in(1)->in(0) : c->in(2)->in(0);
-    assert(iff->is_shenandoah_marking_if(igvn), "expect marking test");
-  }
-  Node* cmpx = iff->in(1)->in(1);
-  igvn->replace_node(cmpx, igvn->makecon(TypeInt::CC_EQ));
-  igvn->rehash_node_delayed(call);
-  call->del_req(call->req()-1);
-}
-#endif

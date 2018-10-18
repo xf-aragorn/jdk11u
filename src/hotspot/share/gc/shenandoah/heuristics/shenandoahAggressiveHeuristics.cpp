@@ -22,9 +22,13 @@
  */
 
 #include "precompiled.hpp"
+
 #include "gc/shenandoah/heuristics/shenandoahAggressiveHeuristics.hpp"
 #include "gc/shenandoah/shenandoahCollectionSet.hpp"
 #include "gc/shenandoah/shenandoahHeapRegion.hpp"
+#include "logging/log.hpp"
+#include "logging/logTag.hpp"
+#include "runtime/os.hpp"
 
 ShenandoahAggressiveHeuristics::ShenandoahAggressiveHeuristics() : ShenandoahHeuristics() {
   // Do not shortcut evacuation
@@ -32,6 +36,9 @@ ShenandoahAggressiveHeuristics::ShenandoahAggressiveHeuristics() : ShenandoahHeu
 
   // Aggressive runs with max speed for allocation, to capture races against mutator
   SHENANDOAH_ERGO_DISABLE_FLAG(ShenandoahPacing);
+
+  // Aggressive evacuates everything, so it needs as much evac space as it can get
+  SHENANDOAH_ERGO_ENABLE_FLAG(ShenandoahEvacReserveOverflow);
 
   // If class unloading is globally enabled, aggressive does unloading even with
   // concurrent cycles.
@@ -52,6 +59,7 @@ void ShenandoahAggressiveHeuristics::choose_collection_set_from_regiondata(Shena
 }
 
 bool ShenandoahAggressiveHeuristics::should_start_normal_gc() const {
+  log_info(gc)("Trigger: Start next cycle immediately");
   return true;
 }
 

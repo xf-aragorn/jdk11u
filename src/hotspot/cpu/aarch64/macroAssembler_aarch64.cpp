@@ -35,7 +35,6 @@
 #include "gc/shared/cardTableBarrierSet.hpp"
 #include "interpreter/interpreter.hpp"
 #include "compiler/disassembler.hpp"
-#include "gc/shared/collectedHeap.hpp"
 #include "memory/resourceArea.hpp"
 #include "nativeInst_aarch64.hpp"
 #include "oops/accessDecorators.hpp"
@@ -2144,12 +2143,8 @@ void MacroAssembler::resolve_jobject(Register value, Register thread, Register t
 void MacroAssembler::stop(const char* msg) {
   address ip = pc();
   pusha();
-  // We use movptr rather than mov here because we need code size not
-  // to depend on the pointer value of msg otherwise C2 can observe
-  // the same node with different sizes when emitted in a scratch
-  // buffer and later when emitted for good.
-  movptr(c_rarg0, (uintptr_t)msg);
-  movptr(c_rarg1, (uintptr_t)ip);
+  mov(c_rarg0, (address)msg);
+  mov(c_rarg1, (address)ip);
   mov(c_rarg2, sp);
   mov(c_rarg3, CAST_FROM_FN_PTR(address, MacroAssembler::debug64));
   // call(c_rarg3);

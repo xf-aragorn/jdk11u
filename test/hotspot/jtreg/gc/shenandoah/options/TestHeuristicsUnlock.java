@@ -47,9 +47,6 @@ public class TestHeuristicsUnlock {
         testWith("static",          Mode.PRODUCT);
         testWith("compact",         Mode.PRODUCT);
 
-        testWith("connected",       Mode.EXPERIMENTAL);
-        testWith("generational",    Mode.EXPERIMENTAL);
-        testWith("LRU",             Mode.EXPERIMENTAL);
         testWith("traversal",       Mode.EXPERIMENTAL);
 
         testWith("aggressive",      Mode.DIAGNOSTIC);
@@ -59,9 +56,9 @@ public class TestHeuristicsUnlock {
     private static void testWith(String h, Mode mode) throws Exception {
         {
             ProcessBuilder pb = ProcessTools.createJavaProcessBuilder(
-                                    "-XX:+UseShenandoahGC",
                                     "-XX:-UnlockDiagnosticVMOptions",
                                     "-XX:-UnlockExperimentalVMOptions",
+                                    "-XX:+UseShenandoahGC",
                                     "-XX:ShenandoahGCHeuristics=" + h,
                                     "-version"
             );
@@ -79,9 +76,9 @@ public class TestHeuristicsUnlock {
 
         {
             ProcessBuilder pb = ProcessTools.createJavaProcessBuilder(
-                                    "-XX:+UseShenandoahGC",
                                     "-XX:+UnlockDiagnosticVMOptions",
                                     "-XX:-UnlockExperimentalVMOptions",
+                                    "-XX:+UseShenandoahGC",
                                     "-XX:ShenandoahGCHeuristics=" + h,
                                     "-version"
             );
@@ -99,9 +96,9 @@ public class TestHeuristicsUnlock {
 
         {
             ProcessBuilder pb = ProcessTools.createJavaProcessBuilder(
-                                    "-XX:+UseShenandoahGC",
                                     "-XX:-UnlockDiagnosticVMOptions",
                                     "-XX:+UnlockExperimentalVMOptions",
+                                    "-XX:+UseShenandoahGC",
                                     "-XX:ShenandoahGCHeuristics=" + h,
                                     "-version"
             );

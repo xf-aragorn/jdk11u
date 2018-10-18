@@ -24,6 +24,7 @@
 #ifndef SHARE_VM_GC_SHENANDOAHUTILS_HPP
 #define SHARE_VM_GC_SHENANDOAHUTILS_HPP
 
+#include "gc/shared/gcCause.hpp"
 #include "gc/shared/isGCActiveMark.hpp"
 #include "gc/shared/vmGCOperations.hpp"
 #include "gc/shenandoah/shenandoahPhaseTimings.hpp"
@@ -36,18 +37,23 @@
 #include "services/memoryService.hpp"
 
 class GCTimer;
+class GCTracer;
 
 class ShenandoahGCSession : public StackObj {
 private:
-  GCTimer*  _timer;
+  ShenandoahHeap* const _heap;
+  GCTimer*  const _timer;
+  GCTracer* const _tracer;
+
   TraceMemoryManagerStats _trace_cycle;
 public:
-  ShenandoahGCSession();
+  ShenandoahGCSession(GCCause::Cause cause);
   ~ShenandoahGCSession();
 };
 
 class ShenandoahGCPhase : public StackObj {
 private:
+  ShenandoahHeap* const _heap;
   const ShenandoahPhaseTimings::Phase   _phase;
 public:
   ShenandoahGCPhase(ShenandoahPhaseTimings::Phase phase);
@@ -57,10 +63,12 @@ public:
 // Aggregates all the things that should happen before/after the pause.
 class ShenandoahGCPauseMark : public StackObj {
 private:
+  ShenandoahHeap* const _heap;
   const GCIdMark                _gc_id_mark;
   const SvcGCMarker             _svc_gc_mark;
   const IsGCActiveMark          _is_gc_active_mark;
   TraceMemoryManagerStats       _trace_pause;
+
 public:
   ShenandoahGCPauseMark(uint gc_id, SvcGCMarker::reason_type type);
   ~ShenandoahGCPauseMark();
@@ -70,9 +78,9 @@ class ShenandoahAllocTrace : public StackObj {
 private:
   double _start;
   size_t _size;
-  ShenandoahHeap::AllocType _alloc_type;
+  ShenandoahAllocRequest::Type _alloc_type;
 public:
-  ShenandoahAllocTrace(size_t words_size, ShenandoahHeap::AllocType alloc_type);
+  ShenandoahAllocTrace(size_t words_size, ShenandoahAllocRequest::Type alloc_type);
   ~ShenandoahAllocTrace();
 };
 

@@ -26,7 +26,6 @@
 #include "gc/shared/stringdedup/stringDedup.hpp"
 #include "gc/shared/stringdedup/stringDedup.inline.hpp"
 #include "gc/shared/workgroup.hpp"
-#include "gc/shenandoah/brooksPointer.hpp"
 #include "gc/shenandoah/shenandoahCollectionSet.hpp"
 #include "gc/shenandoah/shenandoahCollectionSet.inline.hpp"
 #include "gc/shenandoah/shenandoahHeap.hpp"
@@ -35,7 +34,7 @@
 #include "gc/shenandoah/shenandoahStringDedup.hpp"
 #include "gc/shenandoah/shenandoahStrDedupQueue.hpp"
 #include "gc/shenandoah/shenandoahUtils.hpp"
-#include "runtime/os.hpp"
+#include "runtime/thread.hpp"
 
 void ShenandoahStringDedup::initialize() {
   assert(UseShenandoahGC, "String deduplication available with Shenandoah GC");
@@ -43,12 +42,11 @@ void ShenandoahStringDedup::initialize() {
 }
 
 /* Enqueue candidates for deduplication.
- * The method should only be called by GC worker threads, during concurrent marking phase.
+ * The method should only be called by GC worker threads during marking phases.
  */
 void ShenandoahStringDedup::enqueue_candidate(oop java_string) {
-  assert(Thread::current()->is_Worker_thread() ||
-         Thread::current()->is_ConcurrentGC_thread(),
-        "Only from a GC worker/concurrent thread");
+  assert(Thread::current()->is_Worker_thread(),
+        "Only from a GC worker thread");
 
   if (java_string->age() <= StringDeduplicationAgeThreshold) {
     const markOop mark = java_string->mark();
@@ -75,7 +73,6 @@ void ShenandoahStringDedup::deduplicate(oop java_string) {
   StringDedupTable::deduplicate(java_string, &dummy);
 }
 
-
 void ShenandoahStringDedup::parallel_oops_do(OopClosure* cl, uint worker_id) {
   assert(SafepointSynchronize::is_at_safepoint(), "Must be at a safepoint");
   assert(is_enabled(), "String deduplication not enabled");
@@ -94,7 +91,6 @@ void ShenandoahStringDedup::parallel_oops_do(OopClosure* cl, uint worker_id) {
   }
 }
 
-
 void ShenandoahStringDedup::oops_do_slow(OopClosure* cl) {
   assert(SafepointSynchronize::is_at_safepoint(), "Must be at a safepoint");
   assert(is_enabled(), "String deduplication not enabled");
@@ -109,7 +105,7 @@ private:
   ShenandoahMarkingContext* const _mark_context;
 
 public:
-  ShenandoahIsMarkedNextClosure() : _mark_context(ShenandoahHeap::heap()->next_marking_context()) { }
+  ShenandoahIsMarkedNextClosure() : _mark_context(ShenandoahHeap::heap()->marking_context()) { }
 
   bool do_object_b(oop obj) {
     return _mark_context->is_marked(obj);

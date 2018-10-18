@@ -25,7 +25,6 @@
 #include "memory/allocation.hpp"
 #include "gc/shenandoah/brooksPointer.hpp"
 #include "gc/shenandoah/shenandoahHeapRegionSet.inline.hpp"
-#include "gc/shenandoah/shenandoahConnectionMatrix.hpp"
 #include "gc/shenandoah/shenandoahHeap.hpp"
 #include "gc/shenandoah/shenandoahHeap.inline.hpp"
 #include "gc/shenandoah/shenandoahHeapRegion.hpp"
@@ -33,6 +32,7 @@
 #include "gc/shenandoah/shenandoahTraversalGC.hpp"
 #include "gc/shared/space.inline.hpp"
 #include "memory/iterator.inline.hpp"
+#include "memory/resourceArea.hpp"
 #include "memory/universe.hpp"
 #include "oops/oop.inline.hpp"
 #include "runtime/java.hpp"
@@ -279,6 +279,14 @@ void ShenandoahHeapRegion::make_trash() {
   }
 }
 
+void ShenandoahHeapRegion::make_trash_immediate() {
+  make_trash();
+
+  // On this path, we know there are no marked objects in the region,
+  // tell marking context about it to bypass bitmap resets.
+  _heap->complete_marking_context()->reset_top_bitmap(this);
+}
+
 void ShenandoahHeapRegion::make_empty() {
   _heap->assert_heaplock_owned_by_current_thread();
   switch (_state) {
@@ -315,11 +323,6 @@ void ShenandoahHeapRegion::make_committed_bypass() {
     default:
       report_illegal_transition("commit bypass");
   }
-}
-
-bool ShenandoahHeapRegion::rollback_allocation(uint size) {
-  set_top(top() - size);
-  return true;
 }
 
 void ShenandoahHeapRegion::clear_live_data() {
@@ -381,15 +384,11 @@ bool ShenandoahHeapRegion::has_live() const {
 }
 
 size_t ShenandoahHeapRegion::garbage() const {
-  assert(used() >= get_live_data_bytes(), "Live Data must be a subset of used() live: "SIZE_FORMAT" used: "SIZE_FORMAT,
+  assert(used() >= get_live_data_bytes(), "Live Data must be a subset of used() live: " SIZE_FORMAT " used: " SIZE_FORMAT,
          get_live_data_bytes(), used());
 
   size_t result = used() - get_live_data_bytes();
   return result;
-}
-
-bool ShenandoahHeapRegion::in_collection_set() const {
-  return _heap->region_in_collection_set(_region_number);
 }
 
 void ShenandoahHeapRegion::print_on(outputStream* st) const {
@@ -432,19 +431,13 @@ void ShenandoahHeapRegion::print_on(outputStream* st) const {
   }
   st->print("|BTE " INTPTR_FORMAT_W(12) ", " INTPTR_FORMAT_W(12) ", " INTPTR_FORMAT_W(12),
             p2i(bottom()), p2i(top()), p2i(end()));
-  st->print("|TAMS " INTPTR_FORMAT_W(12) ", " INTPTR_FORMAT_W(12),
-            p2i(_heap->complete_marking_context()->top_at_mark_start(region_number())),
-            p2i(_heap->next_marking_context()->top_at_mark_start(region_number())));
+  st->print("|TAMS " INTPTR_FORMAT_W(12),
+            p2i(_heap->marking_context()->top_at_mark_start(const_cast<ShenandoahHeapRegion*>(this))));
   st->print("|U " SIZE_FORMAT_W(5) "%1s", byte_size_in_proper_unit(used()),                proper_unit_for_byte_size(used()));
   st->print("|T " SIZE_FORMAT_W(5) "%1s", byte_size_in_proper_unit(get_tlab_allocs()),     proper_unit_for_byte_size(get_tlab_allocs()));
   st->print("|G " SIZE_FORMAT_W(5) "%1s", byte_size_in_proper_unit(get_gclab_allocs()),    proper_unit_for_byte_size(get_gclab_allocs()));
   st->print("|S " SIZE_FORMAT_W(5) "%1s", byte_size_in_proper_unit(get_shared_allocs()),   proper_unit_for_byte_size(get_shared_allocs()));
   st->print("|L " SIZE_FORMAT_W(5) "%1s", byte_size_in_proper_unit(get_live_data_bytes()), proper_unit_for_byte_size(get_live_data_bytes()));
-  if (_heap->traversal_gc() != NULL && _heap->traversal_gc()->root_regions()->is_in(region_number())) {
-    st->print("|R");
-  } else {
-    st->print("| ");
-  }
   st->print("|CP " SIZE_FORMAT_W(3), _critical_pins);
   st->print("|SN " UINT64_FORMAT_HEX_W(12) ", " UINT64_FORMAT_HEX_W(8) ", " UINT64_FORMAT_HEX_W(8) ", " UINT64_FORMAT_HEX_W(8),
             seqnum_first_alloc_mutator(), seqnum_last_alloc_mutator(),
@@ -481,15 +474,6 @@ void ShenandoahHeapRegion::oop_iterate_humongous(OopIterateClosure* blk) {
   obj->oop_iterate(blk, MemRegion(bottom(), top()));
 }
 
-void ShenandoahHeapRegion::fill_region() {
-  if (free() > (BrooksPointer::word_size() + CollectedHeap::min_fill_size())) {
-    HeapWord* filler = allocate(BrooksPointer::word_size(), ShenandoahHeap::_alloc_shared);
-    HeapWord* obj = allocate(end() - top(), ShenandoahHeap::_alloc_shared);
-    _heap->fill_with_object(obj, end() - obj);
-    BrooksPointer::initialize(oop(obj));
-  }
-}
-
 ShenandoahHeapRegion* ShenandoahHeapRegion::humongous_start_region() const {
   assert(is_humongous(), "Must be a part of the humongous region");
   size_t reg_num = region_number();
@@ -513,37 +497,14 @@ void ShenandoahHeapRegion::recycle() {
 
   reset_alloc_metadata();
 
-  ShenandoahMarkingContext* const compl_ctx = _heap->complete_marking_context();
-  ShenandoahMarkingContext* const next_ctx = _heap->next_marking_context();
-
-  // Reset C-TAMS pointer to ensure size-based iteration, everything
-  // in that regions is going to be new objects.
-  if (ShenandoahRecycleClearsBitmap && !_heap->is_full_gc_in_progress()) {
-    HeapWord* r_bottom = bottom();
-    HeapWord* top = compl_ctx->top_at_mark_start(region_number());
-    if (top > r_bottom) {
-      compl_ctx->clear_bitmap(r_bottom, top);
-    }
-
-    assert(next_ctx->is_bitmap_clear_range(bottom(), end()), "must be clear");
-    next_ctx->set_top_at_mark_start(region_number(), bottom());
-  }
-
-  // We can only safely reset the C-TAMS pointer if the bitmap is clear for that region.
-  assert(compl_ctx->is_bitmap_clear_range(bottom(), end()), "must be clear");
-
-  compl_ctx->set_top_at_mark_start(region_number(), bottom());
-
-  if (UseShenandoahMatrix) {
-    _heap->connection_matrix()->clear_region(region_number());
-  }
+  _heap->marking_context()->reset_top_at_mark_start(this);
 
   make_empty();
 }
 
 HeapWord* ShenandoahHeapRegion::block_start_const(const void* p) const {
   assert(MemRegion(bottom(), end()).contains(p),
-         "p ("PTR_FORMAT") not in space ["PTR_FORMAT", "PTR_FORMAT")",
+         "p (" PTR_FORMAT ") not in space [" PTR_FORMAT ", " PTR_FORMAT ")",
          p2i(p), p2i(bottom()), p2i(end()));
   if (p >= top()) {
     return top();
@@ -554,8 +515,7 @@ HeapWord* ShenandoahHeapRegion::block_start_const(const void* p) const {
       last = cur;
       cur += oop(cur)->size() + BrooksPointer::word_size();
     }
-    assert(oopDesc::is_oop(oop(last)),
-           PTR_FORMAT" should be an object start", p2i(last));
+    shenandoah_assert_correct(NULL, oop(last));
     return last;
   }
 }
@@ -563,13 +523,12 @@ HeapWord* ShenandoahHeapRegion::block_start_const(const void* p) const {
 void ShenandoahHeapRegion::setup_sizes(size_t initial_heap_size, size_t max_heap_size) {
   // Absolute minimums we should not ever break.
   static const size_t MIN_REGION_SIZE = 256*K;
-  static const size_t MIN_NUM_REGIONS = 10;
 
   if (FLAG_IS_DEFAULT(ShenandoahMinRegionSize)) {
     FLAG_SET_DEFAULT(ShenandoahMinRegionSize, MIN_REGION_SIZE);
   }
 
-  uintx region_size;
+  size_t region_size;
   if (FLAG_IS_DEFAULT(ShenandoahHeapRegionSize)) {
     if (ShenandoahMinRegionSize > initial_heap_size / MIN_NUM_REGIONS) {
       err_msg message("Initial heap size (" SIZE_FORMAT "K) is too low to afford the minimum number "
@@ -627,9 +586,10 @@ void ShenandoahHeapRegion::setup_sizes(size_t initial_heap_size, size_t max_heap
   }
 
   // Make sure region size is at least one large page, if enabled.
-  // Otherwise, mem-protecting one region may falsely protect the adjacent
+  // Otherwise, uncommitting one region may falsely uncommit the adjacent
   // regions too.
-  if (UseLargePages) {
+  // Also see shenandoahArguments.cpp, where it handles UseLargePages.
+  if (UseLargePages && ShenandoahUncommit) {
     region_size = MAX2(region_size, os::large_page_size());
   }
 
@@ -637,7 +597,7 @@ void ShenandoahHeapRegion::setup_sizes(size_t initial_heap_size, size_t max_heap
   // Recalculate the region size to make sure it's a power of
   // 2. This means that region_size is the largest power of 2 that's
   // <= what we've calculated so far.
-  region_size = ((uintx)1 << region_size_log);
+  region_size = (1u << region_size_log);
 
   // Now, set up the globals.
   guarantee(RegionSizeBytesShift == 0, "we should only set it once");
@@ -647,7 +607,7 @@ void ShenandoahHeapRegion::setup_sizes(size_t initial_heap_size, size_t max_heap
   RegionSizeWordsShift = RegionSizeBytesShift - LogHeapWordSize;
 
   guarantee(RegionSizeBytes == 0, "we should only set it once");
-  RegionSizeBytes = (size_t)region_size;
+  RegionSizeBytes = region_size;
   RegionSizeWords = RegionSizeBytes >> LogHeapWordSize;
   assert (RegionSizeWords*HeapWordSize == RegionSizeBytes, "sanity");
 
@@ -702,28 +662,6 @@ void ShenandoahHeapRegion::setup_sizes(size_t initial_heap_size, size_t max_heap
                      byte_size_in_proper_unit(MaxTLABSizeBytes), proper_unit_for_byte_size(MaxTLABSizeBytes));
 }
 
-CompactibleSpace* ShenandoahHeapRegion::next_compaction_space() const {
-  return _heap->next_compaction_region(this);
-}
-
-void ShenandoahHeapRegion::prepare_for_compaction(CompactPoint* cp) {
-  scan_and_forward(this, cp);
-}
-
-void ShenandoahHeapRegion::adjust_pointers() {
-  // Check first is there is any work to do.
-  if (used() == 0) {
-    return;   // Nothing to do.
-  }
-
-  scan_and_adjust_pointers(this);
-}
-
-void ShenandoahHeapRegion::compact() {
-  assert(!is_humongous(), "Shouldn't be compacting humongous regions");
-  scan_and_compact(this);
-}
-
 void ShenandoahHeapRegion::do_commit() {
   if (_initialized && can_idle_region()) {
     os::activate_memory((char *)_reserved.start(), _reserved.byte_size());
@@ -760,7 +698,6 @@ void ShenandoahHeapRegion::do_uncommit() {
   }
   _heap->decrease_committed(ShenandoahHeapRegion::region_size_bytes());
 }
-
 
 bool ShenandoahHeapRegion::can_idle_region() const {
   return LINUX_ONLY(ShenandoahUncommitWithIdle && !UseLargePages) NOT_LINUX(false);

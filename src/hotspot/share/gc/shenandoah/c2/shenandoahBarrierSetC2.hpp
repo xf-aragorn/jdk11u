@@ -25,12 +25,13 @@
 #define SHARE_VM_GC_SHENANDOAH_C2_SHENANDOAHBARRIERSETC2_HPP
 
 #include "gc/shared/c2/barrierSetC2.hpp"
+#include "utilities/growableArray.hpp"
 
 class ShenandoahBarrierSetC2State : public ResourceObj {
 private:
   GrowableArray<ShenandoahWriteBarrierNode*>* _shenandoah_barriers;
 
- public:
+public:
   ShenandoahBarrierSetC2State(Arena* comp_arena);
   int shenandoah_barriers_count() const;
   ShenandoahWriteBarrierNode* shenandoah_barrier(int idx) const;
@@ -40,6 +41,7 @@ private:
 
 class ShenandoahBarrierSetC2 : public BarrierSetC2 {
 private:
+  void shenandoah_eliminate_wb_pre(Node* call, PhaseIterGVN* igvn) const;
 
   bool satb_can_remove_pre_barrier(GraphKit* kit, PhaseTransform* phase, Node* adr,
                                    BasicType bt, uint adr_idx) const;
@@ -63,7 +65,6 @@ private:
                                     BasicType bt) const;
 
   Node* shenandoah_enqueue_barrier(GraphKit* kit, Node* val) const;
-  void shenandoah_update_matrix(GraphKit* kit, Node* adr, Node* val) const;
   Node* shenandoah_read_barrier(GraphKit* kit, Node* obj) const;
   Node* shenandoah_storeval_barrier(GraphKit* kit, Node* obj) const;
   Node* shenandoah_write_barrier(GraphKit* kit, Node* obj) const;
@@ -85,10 +86,15 @@ protected:
 
 public:
   static ShenandoahBarrierSetC2* bsc2();
+
+  static bool is_shenandoah_wb_pre_call(Node* call);
+  static bool is_shenandoah_marking_if(PhaseTransform *phase, Node* n);
+  static bool is_shenandoah_state_load(Node* n);
+  static bool has_only_shenandoah_wb_pre_uses(Node* n);
+
   ShenandoahBarrierSetC2State* state() const;
 
   Node* shenandoah_read_barrier_acmp(GraphKit* kit, Node* obj);
-
 
   static const TypeFunc* write_ref_field_pre_entry_Type();
   static const TypeFunc* shenandoah_clone_barrier_Type();
@@ -132,6 +138,8 @@ public:
   // expanded later, then now is the time to do so.
   virtual bool expand_macro_nodes(PhaseMacroExpand* macro) const;
   virtual void verify_gc_barriers(bool post_parse) const;
+
+  virtual Node* ideal_node(PhaseGVN* phase, Node* n, bool can_reshape) const;
 };
 
 #endif // SHARE_VM_GC_SHENANDOAH_C2_SHENANDOAHBARRIERSETC2_HPP

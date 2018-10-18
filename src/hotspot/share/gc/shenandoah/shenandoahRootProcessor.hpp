@@ -24,25 +24,14 @@
 #ifndef SHARE_VM_GC_SHENANDOAH_SHENANDOAHROOTPROCESSOR_HPP
 #define SHARE_VM_GC_SHENANDOAH_SHENANDOAHROOTPROCESSOR_HPP
 
-#include "classfile/classLoaderData.hpp"
 #include "code/codeCache.hpp"
+#include "gc/shenandoah/shenandoahCodeRoots.hpp"
 #include "gc/shenandoah/shenandoahHeap.hpp"
 #include "gc/shenandoah/shenandoahPhaseTimings.hpp"
 #include "gc/shared/strongRootsScope.hpp"
 #include "gc/shared/workgroup.hpp"
 #include "memory/allocation.hpp"
-#include "runtime/mutex.hpp"
-#include "shenandoahCodeRoots.hpp"
-
-class CLDClosure;
-class CodeBlobClosure;
-class G1CollectedHeap;
-class G1GCPhaseTimes;
-class G1ParPushHeapRSClosure;
-class Monitor;
-class OopClosure;
-class SubTasksDone;
-
+#include "memory/iterator.hpp"
 
 class ParallelCLDRootIterator {
 public:
@@ -50,18 +39,14 @@ public:
   void root_cld_do(CLDClosure* strong, CLDClosure* weak);
 };
 
-
 enum Shenandoah_process_roots_tasks {
   SHENANDOAH_RP_PS_Universe_oops_do,
   SHENANDOAH_RP_PS_JNIHandles_oops_do,
   SHENANDOAH_RP_PS_JNIHandles_weak_oops_do,
   SHENANDOAH_RP_PS_ObjectSynchronizer_oops_do,
-  SHENANDOAH_RP_PS_FlatProfiler_oops_do,
   SHENANDOAH_RP_PS_Management_oops_do,
   SHENANDOAH_RP_PS_SystemDictionary_oops_do,
-  SHENANDOAH_RP_PS_ClassLoaderDataGraph_oops_do,
   SHENANDOAH_RP_PS_jvmti_oops_do,
-  SHENANDOAH_RP_PS_CodeCache_oops_do,
   // Leave this one last.
   SHENANDOAH_RP_PS_NumElements
 };
@@ -73,14 +58,12 @@ class ShenandoahRootProcessor : public StackObj {
   ShenandoahPhaseTimings::Phase _phase;
   ParallelCLDRootIterator   _cld_iterator;
   ShenandoahAllCodeRootsIterator _coderoots_all_iterator;
-  ParallelObjectSynchronizerIterator _om_iterator;
   CodeBlobClosure* _threads_nmethods_cl;
 
   void process_java_roots(OopClosure* scan_non_heap_roots,
                           CLDClosure* scan_strong_clds,
                           CLDClosure* scan_weak_clds,
                           CodeBlobClosure* scan_strong_code,
-                          CodeBlobClosure* nmethods_cl,
                           ThreadClosure* thread_cl,
                           uint worker_i);
 
@@ -120,7 +103,6 @@ class ShenandoahRootEvacuator : public StackObj {
   StrongRootsScope _srs;
   ShenandoahPhaseTimings::Phase _phase;
   ShenandoahCsetCodeRootsIterator _coderoots_cset_iterator;
-  CodeBlobClosure* _threads_nmethods_cl;
 
 public:
   ShenandoahRootEvacuator(ShenandoahHeap* heap, uint n_workers,

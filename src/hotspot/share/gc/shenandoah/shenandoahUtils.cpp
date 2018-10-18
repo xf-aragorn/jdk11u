@@ -23,7 +23,10 @@
 
 #include "precompiled.hpp"
 
+#include "gc/shared/gcCause.hpp"
 #include "gc/shared/gcTimer.hpp"
+#include "gc/shared/gcTrace.hpp"
+#include "gc/shared/gcWhen.hpp"
 #include "gc/shenandoah/shenandoahAllocTracker.hpp"
 #include "gc/shenandoah/shenandoahCollectorPolicy.hpp"
 #include "gc/shenandoah/shenandoahMarkCompact.hpp"
@@ -31,14 +34,18 @@
 #include "gc/shenandoah/shenandoahHeuristics.hpp"
 #include "gc/shenandoah/shenandoahUtils.hpp"
 
+ShenandoahGCSession::ShenandoahGCSession(GCCause::Cause cause) :
+  _heap(ShenandoahHeap::heap()),
+  _timer(_heap->gc_timer()),
+  _tracer(_heap->tracer()) {
 
-ShenandoahGCSession::ShenandoahGCSession() {
-  ShenandoahHeap* sh = ShenandoahHeap::heap();
-  _timer = sh->gc_timer();
   _timer->register_gc_start();
-  sh->shenandoahPolicy()->record_cycle_start();
-  sh->heuristics()->record_cycle_start();
-  _trace_cycle.initialize(sh->cycle_memory_manager(), sh->gc_cause(),
+  _tracer->report_gc_start(cause, _timer->gc_start());
+  _heap->trace_heap(GCWhen::BeforeGC, _tracer);
+
+  _heap->shenandoah_policy()->record_cycle_start();
+  _heap->heuristics()->record_cycle_start();
+  _trace_cycle.initialize(_heap->cycle_memory_manager(), _heap->gc_cause(),
           /* allMemoryPoolsAffected */    true,
           /* recordGCBeginTime = */       true,
           /* recordPreGCUsage = */        true,
@@ -51,15 +58,19 @@ ShenandoahGCSession::ShenandoahGCSession() {
 }
 
 ShenandoahGCSession::~ShenandoahGCSession() {
-  ShenandoahHeap::heap()->heuristics()->record_cycle_end();
+  _heap->heuristics()->record_cycle_end();
   _timer->register_gc_end();
+  _heap->trace_heap(GCWhen::AfterGC, _tracer);
+  _tracer->report_gc_end(_timer->gc_end(), _timer->time_partitions());
 }
 
 ShenandoahGCPauseMark::ShenandoahGCPauseMark(uint gc_id, SvcGCMarker::reason_type type) :
-  _gc_id_mark(gc_id), _svc_gc_mark(type), _is_gc_active_mark() {
-  ShenandoahHeap* sh = ShenandoahHeap::heap();
+  _heap(ShenandoahHeap::heap()), _gc_id_mark(gc_id), _svc_gc_mark(type), _is_gc_active_mark() {
 
-  _trace_pause.initialize(sh->stw_memory_manager(), sh->gc_cause(),
+  // FIXME: It seems that JMC throws away level 0 events, which are the Shenandoah
+  // pause events. Create this pseudo level 0 event to push real events to level 1.
+  _heap->gc_timer()->register_gc_phase_start("Shenandoah", Ticks::now());
+  _trace_pause.initialize(_heap->stw_memory_manager(), _heap->gc_cause(),
           /* allMemoryPoolsAffected */    true,
           /* recordGCBeginTime = */       true,
           /* recordPreGCUsage = */        false,
@@ -70,24 +81,24 @@ ShenandoahGCPauseMark::ShenandoahGCPauseMark(uint gc_id, SvcGCMarker::reason_typ
           /* countCollection = */         true
   );
 
-  sh->heuristics()->record_gc_start();
+  _heap->heuristics()->record_gc_start();
 }
 
 ShenandoahGCPauseMark::~ShenandoahGCPauseMark() {
-  ShenandoahHeap* sh = ShenandoahHeap::heap();
-  sh->heuristics()->record_gc_end();
+  _heap->gc_timer()->register_gc_phase_end(Ticks::now());
+  _heap->heuristics()->record_gc_end();
 }
 
 ShenandoahGCPhase::ShenandoahGCPhase(const ShenandoahPhaseTimings::Phase phase) :
-  _phase(phase) {
-  ShenandoahHeap::heap()->phase_timings()->record_phase_start(_phase);
+  _heap(ShenandoahHeap::heap()), _phase(phase) {
+  _heap->phase_timings()->record_phase_start(_phase);
 }
 
 ShenandoahGCPhase::~ShenandoahGCPhase() {
-  ShenandoahHeap::heap()->phase_timings()->record_phase_end(_phase);
+  _heap->phase_timings()->record_phase_end(_phase);
 }
 
-ShenandoahAllocTrace::ShenandoahAllocTrace(size_t words_size, ShenandoahHeap::AllocType alloc_type) {
+ShenandoahAllocTrace::ShenandoahAllocTrace(size_t words_size, ShenandoahAllocRequest::Type alloc_type) {
   if (ShenandoahAllocationTrace) {
     _start = os::elapsedTime();
     _size = words_size;
@@ -95,7 +106,7 @@ ShenandoahAllocTrace::ShenandoahAllocTrace(size_t words_size, ShenandoahHeap::Al
   } else {
     _start = 0;
     _size = 0;
-    _alloc_type = ShenandoahHeap::AllocType(0);
+    _alloc_type = ShenandoahAllocRequest::Type(0);
   }
 }
 
@@ -127,4 +138,3 @@ ShenandoahWorkerSession::~ShenandoahWorkerSession() {
   ShenandoahThreadLocalData::set_worker_id(thr, ShenandoahThreadLocalData::INVALID_WORKER_ID);
 #endif
 }
-

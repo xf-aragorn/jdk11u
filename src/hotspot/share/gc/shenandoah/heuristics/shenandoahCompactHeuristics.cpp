@@ -22,13 +22,17 @@
  */
 
 #include "precompiled.hpp"
+
 #include "gc/shenandoah/shenandoahCollectionSet.hpp"
 #include "gc/shenandoah/heuristics/shenandoahCompactHeuristics.hpp"
 #include "gc/shenandoah/shenandoahFreeSet.hpp"
 #include "gc/shenandoah/shenandoahHeapRegion.hpp"
+#include "logging/log.hpp"
+#include "logging/logTag.hpp"
 
 ShenandoahCompactHeuristics::ShenandoahCompactHeuristics() : ShenandoahHeuristics() {
   SHENANDOAH_ERGO_ENABLE_FLAG(ShenandoahUncommit);
+  SHENANDOAH_ERGO_ENABLE_FLAG(ShenandoahAlwaysClearSoftRefs);
   SHENANDOAH_ERGO_OVERRIDE_DEFAULT(ShenandoahAllocationThreshold,  10);
   SHENANDOAH_ERGO_OVERRIDE_DEFAULT(ShenandoahImmediateThreshold,   100);
   SHENANDOAH_ERGO_OVERRIDE_DEFAULT(ShenandoahUncommitDelay,        5000);
@@ -40,21 +44,27 @@ bool ShenandoahCompactHeuristics::should_start_normal_gc() const {
   ShenandoahHeap* heap = ShenandoahHeap::heap();
 
   size_t available = heap->free_set()->available();
-  size_t bytes_allocated = heap->bytes_allocated_since_gc_start();
   size_t threshold_bytes_allocated = heap->capacity() * ShenandoahAllocationThreshold / 100;
 
-  if (available < threshold_bytes_allocated || bytes_allocated > threshold_bytes_allocated) {
-    log_info(gc,ergo)("Concurrent marking triggered. Free: " SIZE_FORMAT "M, Allocated: " SIZE_FORMAT "M, Alloc Threshold: " SIZE_FORMAT "M",
-                      available / M, bytes_allocated / M, threshold_bytes_allocated / M);
+  if (available < threshold_bytes_allocated) {
+    log_info(gc)("Trigger: Free (" SIZE_FORMAT "M) is lower than allocated recently (" SIZE_FORMAT "M)",
+                 available / M, threshold_bytes_allocated / M);
     return true;
   }
+
+  size_t bytes_allocated = heap->bytes_allocated_since_gc_start();
+  if (bytes_allocated > threshold_bytes_allocated) {
+    log_info(gc)("Trigger: Allocated since last cycle (" SIZE_FORMAT "M) is larger than allocation threshold (" SIZE_FORMAT "M)",
+                 bytes_allocated / M, threshold_bytes_allocated / M);
+    return true;
+  }
+
   return ShenandoahHeuristics::should_start_normal_gc();
 }
 
 void ShenandoahCompactHeuristics::choose_collection_set_from_regiondata(ShenandoahCollectionSet* cset,
                                                                         RegionData* data, size_t size,
                                                                         size_t actual_free) {
-
   // Do not select too large CSet that would overflow the available free space
   size_t max_cset = actual_free * 3 / 4;
 

@@ -22,11 +22,9 @@
  */
 
 #include "precompiled.hpp"
+
 #include "gc/shenandoah/shenandoahCollectionSet.hpp"
-#include "gc/shenandoah/shenandoahCollectionSet.inline.hpp"
-#include "gc/shenandoah/shenandoahHeap.hpp"
 #include "gc/shenandoah/shenandoahHeap.inline.hpp"
-#include "gc/shenandoah/shenandoahHeapRegion.hpp"
 #include "gc/shenandoah/shenandoahHeapRegionSet.hpp"
 #include "runtime/atomic.hpp"
 #include "utilities/copy.hpp"
@@ -48,7 +46,6 @@ ShenandoahCollectionSet::ShenandoahCollectionSet(ShenandoahHeap* heap, HeapWord*
   // Initialize cset map
   Copy::zero_to_bytes(_cset_map, _map_size);
 }
-
 
 void ShenandoahCollectionSet::add_region(ShenandoahHeapRegion* r) {
   assert(ShenandoahSafepoint::is_at_shenandoah_safepoint(), "Must be at a safepoint");
@@ -134,7 +131,6 @@ ShenandoahHeapRegion* ShenandoahCollectionSet::claim_next() {
   return NULL;
 }
 
-
 ShenandoahHeapRegion* ShenandoahCollectionSet::next() {
   assert(ShenandoahSafepoint::is_at_shenandoah_safepoint(), "Must be at a safepoint");
   assert(Thread::current()->is_VM_thread(), "Must be VMThread");
@@ -149,7 +145,6 @@ ShenandoahHeapRegion* ShenandoahCollectionSet::next() {
   return NULL;
 }
 
-
 void ShenandoahCollectionSet::print_on(outputStream* out) const {
   out->print_cr("Collection Set : " SIZE_FORMAT "", count());
 
@@ -162,4 +157,3 @@ void ShenandoahCollectionSet::print_on(outputStream* out) const {
   }
   assert(regions == count(), "Must match");
 }
-

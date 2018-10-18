@@ -22,25 +22,24 @@
  */
 
 #include "precompiled.hpp"
+
 #include "gc/shenandoah/heuristics/shenandoahTraversalHeuristics.hpp"
 #include "gc/shenandoah/shenandoahFreeSet.hpp"
 #include "gc/shenandoah/shenandoahHeuristics.hpp"
 #include "gc/shenandoah/shenandoahTraversalGC.hpp"
+#include "logging/log.hpp"
+#include "logging/logTag.hpp"
 #include "utilities/quickSort.hpp"
 
 ShenandoahTraversalHeuristics::ShenandoahTraversalHeuristics() : ShenandoahHeuristics(),
-  _free_threshold(ShenandoahInitFreeThreshold),
-  _peak_occupancy(0),
   _last_cset_select(0)
  {
-  FLAG_SET_DEFAULT(UseShenandoahMatrix,              false);
   FLAG_SET_DEFAULT(ShenandoahSATBBarrier,            false);
   FLAG_SET_DEFAULT(ShenandoahStoreValReadBarrier,    false);
   FLAG_SET_DEFAULT(ShenandoahStoreValEnqueueBarrier, true);
   FLAG_SET_DEFAULT(ShenandoahKeepAliveBarrier,       false);
   FLAG_SET_DEFAULT(ShenandoahWriteBarrierRB,         false);
   FLAG_SET_DEFAULT(ShenandoahAllowMixedAllocs,       false);
-  FLAG_SET_DEFAULT(ShenandoahRecycleClearsBitmap,    true);
 
   SHENANDOAH_ERGO_OVERRIDE_DEFAULT(ShenandoahRefProcFrequency, 1);
 
@@ -48,29 +47,6 @@ ShenandoahTraversalHeuristics::ShenandoahTraversalHeuristics() : ShenandoahHeuri
   if (ClassUnloadingWithConcurrentMark) {
     SHENANDOAH_ERGO_OVERRIDE_DEFAULT(ShenandoahUnloadClassesFrequency, 1);
   }
-
-  // Workaround the bug in degen-traversal that evac assists expose.
-  //
-  // During traversal cycle, we can evacuate some object from region R1 (CS) to R2 (R).
-  // Then degen-traversal happens, drops the cset, and finishes up the fixups.
-  // Then next cycle happens to put both R1 and R2 into CS, and then R2 evacuates to R3.
-  // It creates the double forwarding for that object: R1 (CS) -> R2 (CS) -> R3 (R).
-  //
-  // It is likely at that point that no references to R1 copy are left after the degen,
-  // so this double forwarding is not exposed. *Unless* we have evac assists, that touch
-  // the adjacent objects while evacuating live objects from R1, step on "bad" R1 copy,
-  // and fail the internal asserts when getting oop sizes to walk the heap, or touching
-  // its fwdptrs. The same thing would probably happen if we do size-based iteration
-  // somewhere else.
-  //
-  // AllocHumongousFragment test exposes it nicely, always running into degens.
-  //
-  // TODO: Fix this properly
-  // There are two alternatives: fix it in degen so that it never leaves double forwarding,
-  // or make sure we only use raw accessors in evac assist path when getting oop_size,
-  // including all exotic shapes like instanceMirrorKlass, and touching fwdptrs. The second
-  // option is partly done in jdk12, but not in earlier jdks.
-  FLAG_SET_DEFAULT(ShenandoahEvacAssist, 0);
 }
 
 bool ShenandoahTraversalHeuristics::should_start_normal_gc() const {
@@ -96,10 +72,7 @@ const char* ShenandoahTraversalHeuristics::name() {
 void ShenandoahTraversalHeuristics::choose_collection_set(ShenandoahCollectionSet* collection_set) {
   ShenandoahHeap* heap = ShenandoahHeap::heap();
 
-  // No root regions in this mode.
   ShenandoahTraversalGC* traversal_gc = heap->traversal_gc();
-  ShenandoahHeapRegionSet* root_regions = traversal_gc->root_regions();
-  root_regions->clear();
 
   ShenandoahHeapRegionSet* traversal_set = traversal_gc->traversal_set();
   traversal_set->clear();
@@ -142,10 +115,11 @@ void ShenandoahTraversalHeuristics::choose_collection_set(ShenandoahCollectionSe
   // The significant complication is that liveness data was collected at the previous cycle, and only
   // for those regions that were allocated before previous cycle started.
 
+  size_t capacity    = heap->capacity();
   size_t actual_free = heap->free_set()->available();
-  size_t free_target = MIN2<size_t>(_free_threshold + MaxNormalStep, 100) * ShenandoahHeap::heap()->capacity() / 100;
+  size_t free_target = ShenandoahMinFreeThreshold * capacity / 100;
   size_t min_garbage = free_target > actual_free ? (free_target - actual_free) : 0;
-  size_t max_cset    = actual_free * 3 / 4;
+  size_t max_cset    = (size_t)(1.0 * ShenandoahEvacReserve * capacity / 100 / ShenandoahEvacWaste);
 
   log_info(gc, ergo)("Adaptive CSet Selection. Target Free: " SIZE_FORMAT "M, Actual Free: "
                      SIZE_FORMAT "M, Max CSet: " SIZE_FORMAT "M, Min Garbage: " SIZE_FORMAT "M",
@@ -226,96 +200,60 @@ void ShenandoahTraversalHeuristics::choose_collection_set(ShenandoahCollectionSe
   _last_cset_select = ShenandoahHeapRegion::seqnum_current_alloc();
 }
 
-void ShenandoahTraversalHeuristics::handle_cycle_success() {
-  ShenandoahHeap* heap = ShenandoahHeap::heap();
-  size_t capacity = heap->capacity();
-
-  size_t current_threshold = (capacity - _peak_occupancy) * 100 / capacity;
-  size_t min_threshold = ShenandoahMinFreeThreshold;
-  intx step = min_threshold - current_threshold;
-  step = MAX2(step, (intx) -MaxNormalStep);
-  step = MIN2(step, (intx) MaxNormalStep);
-
-  log_info(gc, ergo)("Capacity: " SIZE_FORMAT "M, Peak Occupancy: " SIZE_FORMAT
-                     "M, Lowest Free: " SIZE_FORMAT "M, Free Threshold: " UINTX_FORMAT "M",
-                     capacity / M, _peak_occupancy / M,
-                     (capacity - _peak_occupancy) / M, ShenandoahMinFreeThreshold * capacity / 100 / M);
-
-  if (step > 0) {
-    // Pessimize
-    adjust_free_threshold(step);
-  } else if (step < 0) {
-    // Optimize, if enough happy cycles happened
-    if (_successful_cycles_in_a_row > ShenandoahHappyCyclesThreshold &&
-        _free_threshold > 0) {
-      adjust_free_threshold(step);
-      _successful_cycles_in_a_row = 0;
-    }
-  } else {
-    // do nothing
-  }
-  _peak_occupancy = 0;
-}
-
-void ShenandoahTraversalHeuristics::adjust_free_threshold(intx adj) {
-  intx new_value = adj + _free_threshold;
-  uintx new_threshold = (uintx)MAX2<intx>(new_value, 0);
-  new_threshold = MAX2(new_threshold, ShenandoahMinFreeThreshold);
-  new_threshold = MIN2(new_threshold, ShenandoahMaxFreeThreshold);
-  if (new_threshold != _free_threshold) {
-    _free_threshold = new_threshold;
-    log_info(gc,ergo)("Adjusting free threshold to: " UINTX_FORMAT "%% (" SIZE_FORMAT "M)",
-                      _free_threshold, _free_threshold * ShenandoahHeap::heap()->capacity() / 100 / M);
-  }
-}
-
-void ShenandoahTraversalHeuristics::record_success_concurrent() {
-  ShenandoahHeuristics::record_success_concurrent();
-  handle_cycle_success();
-}
-
-void ShenandoahTraversalHeuristics::record_success_degenerated() {
-  ShenandoahHeuristics::record_success_degenerated();
-  adjust_free_threshold(DegeneratedGC_Hit);
-}
-
-void ShenandoahTraversalHeuristics::record_success_full() {
-  ShenandoahHeuristics::record_success_full();
-  adjust_free_threshold(AllocFailure_Hit);
-}
-
-void ShenandoahTraversalHeuristics::record_explicit_gc() {
-  ShenandoahHeuristics::record_explicit_gc();
-  adjust_free_threshold(UserRequested_Hit);
-}
-
-void ShenandoahTraversalHeuristics::record_peak_occupancy() {
-  _peak_occupancy = MAX2(_peak_occupancy, ShenandoahHeap::heap()->used());
-}
-
-ShenandoahHeap::GCCycleMode ShenandoahTraversalHeuristics::should_start_traversal_gc() {
+bool ShenandoahTraversalHeuristics::should_start_traversal_gc() {
   ShenandoahHeap* heap = ShenandoahHeap::heap();
   assert(!heap->has_forwarded_objects(), "no forwarded objects here");
+
   size_t capacity = heap->capacity();
   size_t available = heap->free_set()->available();
 
-  size_t threshold_available = (capacity * _free_threshold) / 100;
-  size_t bytes_allocated = heap->bytes_allocated_since_gc_start();
-  size_t threshold_bytes_allocated = heap->capacity() * ShenandoahAllocationThreshold / 100;
-
-  if (available < threshold_available &&
-      bytes_allocated > threshold_bytes_allocated) {
-    log_info(gc,ergo)("Concurrent traversal triggered. Free: " SIZE_FORMAT "M, Free Threshold: " SIZE_FORMAT
-                      "M; Allocated: " SIZE_FORMAT "M, Alloc Threshold: " SIZE_FORMAT "M",
-                      available / M, threshold_available / M, bytes_allocated / M, threshold_bytes_allocated / M);
-    // Need to check that an appropriate number of regions have
-    // been allocated since last concurrent mark too.
-    return ShenandoahHeap::MAJOR;
-  } else if (ShenandoahHeuristics::should_start_normal_gc()) {
-    return ShenandoahHeap::MAJOR;
+  // Check if we are falling below the worst limit, time to trigger the GC, regardless of
+  // anything else.
+  size_t min_threshold = ShenandoahMinFreeThreshold * heap->capacity() / 100;
+  if (available < min_threshold) {
+    log_info(gc)("Trigger: Free (" SIZE_FORMAT "M) is below minimum threshold (" SIZE_FORMAT "M)",
+                 available / M, min_threshold / M);
+    return true;
   }
 
-  return ShenandoahHeap::NONE;
+  // Check if are need to learn a bit about the application
+  const size_t max_learn = ShenandoahLearningSteps;
+  if (_gc_times_learned < max_learn) {
+    size_t init_threshold = ShenandoahInitFreeThreshold * heap->capacity() / 100;
+    if (available < init_threshold) {
+      log_info(gc)("Trigger: Learning " SIZE_FORMAT " of " SIZE_FORMAT ". Free (" SIZE_FORMAT "M) is below initial threshold (" SIZE_FORMAT "M)",
+                   _gc_times_learned + 1, max_learn, available / M, init_threshold / M);
+      return true;
+    }
+  }
+
+  // Check if allocation headroom is still okay. This also factors in:
+  //   1. Some space to absorb allocation spikes
+  //   2. Accumulated penalties from Degenerated and Full GC
+
+  size_t allocation_headroom = available;
+
+  size_t spike_headroom = ShenandoahAllocSpikeFactor * capacity / 100;
+  size_t penalties      = _gc_time_penalties         * capacity / 100;
+
+  allocation_headroom -= MIN2(allocation_headroom, spike_headroom);
+  allocation_headroom -= MIN2(allocation_headroom, penalties);
+
+  double average_gc = _gc_time_history->avg();
+  double time_since_last = time_since_last_gc();
+  double allocation_rate = heap->bytes_allocated_since_gc_start() / time_since_last;
+
+  if (average_gc > allocation_headroom / allocation_rate) {
+    log_info(gc)("Trigger: Average GC time (%.2f ms) is above the time for allocation rate (%.2f MB/s) to deplete free headroom (" SIZE_FORMAT "M)",
+                 average_gc * 1000, allocation_rate / M, allocation_headroom / M);
+    log_info(gc, ergo)("Free headroom: " SIZE_FORMAT "M (free) - " SIZE_FORMAT "M (spike) - " SIZE_FORMAT "M (penalties) = " SIZE_FORMAT "M",
+                       available / M, spike_headroom / M, penalties / M, allocation_headroom / M);
+    return true;
+  } else if (ShenandoahHeuristics::should_start_normal_gc()) {
+    return true;
+  }
+
+  return false;
 }
 
 void ShenandoahTraversalHeuristics::choose_collection_set_from_regiondata(ShenandoahCollectionSet* set,

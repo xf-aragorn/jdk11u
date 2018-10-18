@@ -135,7 +135,6 @@ void ShenandoahMetricsSnapshot::print() {
 }
 
 bool ShenandoahMetricsSnapshot::is_good_progress(const char *label) {
-
   // Under the critical threshold? Declare failure.
   size_t free_actual   = _heap->free_set()->available();
   size_t free_expected = _heap->max_capacity() / 100 * ShenandoahCriticalFreeThreshold;
@@ -148,7 +147,7 @@ bool ShenandoahMetricsSnapshot::is_good_progress(const char *label) {
   // Freed up enough? Good! Declare victory.
   size_t progress_actual   = (_used_before > _used_after) ? _used_before - _used_after : 0;
   size_t progress_expected = ShenandoahHeapRegion::region_size_bytes();
-  if (progress_actual > progress_expected) {
+  if (progress_actual >= progress_expected) {
     return true;
   }
   log_info(gc,ergo)("Not enough progress (" SIZE_FORMAT "M, need " SIZE_FORMAT "M) after %s",
@@ -175,4 +174,3 @@ bool ShenandoahMetricsSnapshot::is_good_progress(const char *label) {
   // Nothing good had happened.
   return false;
 }
-

@@ -24,20 +24,10 @@
 #ifndef SHARE_VM_GC_SHENANDOAH_SHENANDOAHCOLLECTORPOLICY_HPP
 #define SHARE_VM_GC_SHENANDOAH_SHENANDOAHCOLLECTORPOLICY_HPP
 
-#include "gc/shared/gcTrace.hpp"
-#include "gc/shared/gcTimer.hpp"
 #include "gc/shared/collectorPolicy.hpp"
-#include "gc/shenandoah/shenandoahPhaseTimings.hpp"
+#include "gc/shared/gcTrace.hpp"
 #include "gc/shenandoah/shenandoahHeap.hpp"
-#include "runtime/arguments.hpp"
-#include "utilities/numberSeq.hpp"
-
-class ShenandoahCollectionSet;
-class ShenandoahConnectionMatrix;
-class ShenandoahFreeSet;
-class ShenandoahHeap;
-class ShenandoahHeuristics;
-class outputStream;
+#include "utilities/ostream.hpp"
 
 class ShenandoahCollectorPolicy: public CollectorPolicy {
 private:
@@ -57,19 +47,8 @@ private:
 
   size_t _cycle_counter;
 
-
 public:
   ShenandoahCollectorPolicy();
-
-  virtual ShenandoahCollectorPolicy* as_pgc_policy();
-
-  BarrierSet::Name barrier_set_name();
-
-  HeapWord* mem_allocate_work(size_t size,
-                              bool is_tlab,
-                              bool* gc_overhead_limit_was_exceeded);
-
-  HeapWord* satisfy_failed_allocation(size_t size, bool is_tlab);
 
   void initialize_alignments();
 
@@ -95,6 +74,5 @@ public:
 
   void print_gc_stats(outputStream* out) const;
 };
-
 
 #endif // SHARE_VM_GC_SHENANDOAH_SHENANDOAHCOLLECTORPOLICY_HPP

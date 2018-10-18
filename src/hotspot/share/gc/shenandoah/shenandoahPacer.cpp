@@ -23,10 +23,10 @@
 
 #include "precompiled.hpp"
 
-#include "gc/shenandoah/shenandoahPacer.hpp"
+#include "gc/shenandoah/shenandoahFreeSet.hpp"
 #include "gc/shenandoah/shenandoahHeap.hpp"
 #include "gc/shenandoah/shenandoahHeap.inline.hpp"
-#include "gc/shenandoah/shenandoahFreeSet.hpp"
+#include "gc/shenandoah/shenandoahPacer.hpp"
 
 /*
  * In normal concurrent cycle, we have to pace the application to let GC finish.
@@ -80,15 +80,7 @@ void ShenandoahPacer::setup_for_evac() {
   assert(ShenandoahPacing, "Only be here when pacing is enabled");
 
   size_t used = _heap->collection_set()->used();
-  size_t live = _heap->collection_set()->live_data();
   size_t free = _heap->free_set()->available();
-
-  // Evacuation allocates, bypassing the pacing. Discount that from free space available.
-  if (free > live) {
-    free -= live;
-  } else {
-    free = ShenandoahHeapRegion::region_size_bytes() * 10;
-  }
 
   size_t non_taxable = free * ShenandoahPacingCycleSlack / 100;
   size_t taxable = free - non_taxable;
@@ -100,7 +92,7 @@ void ShenandoahPacer::setup_for_evac() {
 
   restart_with(non_taxable, tax);
 
-  log_info(gc, ergo)("Pacer for Evacuation. Used CSet: " SIZE_FORMAT "M, Avail: " SIZE_FORMAT
+  log_info(gc, ergo)("Pacer for Evacuation. Used CSet: " SIZE_FORMAT "M, Free: " SIZE_FORMAT
                      "M, Non-Taxable: " SIZE_FORMAT "M, Alloc Tax Rate: %.1fx",
                      used / M, free / M, non_taxable / M, tax);
 }
@@ -148,31 +140,6 @@ void ShenandoahPacer::setup_for_traversal() {
   log_info(gc, ergo)("Pacer for Traversal. Expected Live: " SIZE_FORMAT "M, Free: " SIZE_FORMAT
                      "M, Non-Taxable: " SIZE_FORMAT "M, Alloc Tax Rate: %.1fx",
                      live / M, free / M, non_taxable / M, tax);
-}
-
-/*
- * Partial collection walks only the part of the heap. Incoming arugment will tell us how much
- * work the heuristics is expecting us to do. We would use that as the baseline.
- */
-
-void ShenandoahPacer::setup_for_partial(size_t work_words) {
-  assert(ShenandoahPacing, "Only be here when pacing is enabled");
-
-  size_t work_bytes = work_words * HeapWordSize;
-  size_t free = _heap->free_set()->available();
-
-  size_t non_taxable = free * ShenandoahPacingCycleSlack / 100;
-  size_t taxable = free - non_taxable;
-
-  double tax = 1.0 * work_bytes / taxable; // base tax for available free space
-  tax = MAX2<double>(1, tax);              // never allocate more than GC collects during the cycle
-  tax *= ShenandoahPacingSurcharge;        // additional surcharge to help unclutter heap
-
-  restart_with(non_taxable, tax);
-
-  log_info(gc, ergo)("Pacer for Partial. Work: " SIZE_FORMAT "M, Free: " SIZE_FORMAT
-                     "M, Non-Taxable: " SIZE_FORMAT "M, Alloc Tax Rate: %.1fx",
-                     work_bytes / M, free / M, non_taxable / M, tax);
 }
 
 /*

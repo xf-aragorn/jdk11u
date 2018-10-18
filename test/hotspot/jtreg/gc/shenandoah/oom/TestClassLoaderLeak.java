@@ -111,7 +111,6 @@ public class TestClassLoaderLeak {
         }
     }
 
-
     public static void main(String[] args) throws Exception {
         if (args.length > 0) {
             String classDir = TestClassLoaderLeak.class.getProtectionDomain().getCodeSource().getLocation().getPath();
@@ -129,9 +128,6 @@ public class TestClassLoaderLeak {
            "traversal",
            "aggressive",
            "passive",
-           "connected",
-           "generational",
-           "LRU",
         };
 
         for (String h : heuristics) {

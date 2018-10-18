@@ -29,14 +29,14 @@
 
 class ShenandoahPreBarrierStub: public CodeStub {
   friend class ShenandoahBarrierSetC1;
- private:
+private:
   bool _do_load;
   LIR_Opr _addr;
   LIR_Opr _pre_val;
   LIR_PatchCode _patch_code;
   CodeEmitInfo* _info;
 
- public:
+public:
   // Version that _does_ generate a load of the previous value from addr.
   // addr (the address of the field to be read) must be a LIR_Address
   // pre_val (a temporary register) must be a register;
@@ -87,13 +87,13 @@ class ShenandoahPreBarrierStub: public CodeStub {
 
 class ShenandoahWriteBarrierStub: public CodeStub {
   friend class ShenandoahBarrierSetC1;
- private:
+private:
   LIR_Opr _obj;
   LIR_Opr _result;
   CodeEmitInfo* _info;
   bool _needs_null_check;
 
- public:
+public:
   ShenandoahWriteBarrierStub(LIR_Opr obj, LIR_Opr result, CodeEmitInfo* info, bool needs_null_check) :
     _obj(obj), _result(result), _info(info), _needs_null_check(needs_null_check)
   {
@@ -121,10 +121,7 @@ class ShenandoahBarrierSetC1 : public BarrierSetC1 {
 private:
   CodeBlob* _pre_barrier_c1_runtime_code_blob;
 
-  void keep_alive_barrier(LIR_Opr val);
-
   void pre_barrier(LIRAccess& access, LIR_Opr addr_opr, LIR_Opr pre_val);
-  void post_barrier(LIRAccess& access, LIR_OprDesc* addr, LIR_OprDesc* new_val);
 
   LIR_Opr read_barrier(LIRAccess& access, LIR_Opr obj, CodeEmitInfo* info, bool need_null_check);
   LIR_Opr write_barrier(LIRAccess& access, LIR_Opr obj, CodeEmitInfo* info, bool need_null_check);

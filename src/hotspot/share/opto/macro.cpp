@@ -53,6 +53,7 @@
 #endif // INCLUDE_G1GC
 #if INCLUDE_SHENANDOAHGC
 #include "gc/shenandoah/brooksPointer.hpp"
+#include "gc/shenandoah/c2/shenandoahBarrierSetC2.hpp"
 #include "gc/shenandoah/c2/shenandoahSupport.hpp"
 #endif
 
@@ -636,7 +637,7 @@ bool PhaseMacroExpand::can_eliminate_allocation(AllocateNode *alloc, GrowableArr
                                    k < kmax && can_eliminate; k++) {
           Node* n = use->fast_out(k);
           if (!n->is_Store() && n->Opcode() != Op_CastP2X &&
-              SHENANDOAHGC_ONLY((!UseShenandoahGC || !n->is_shenandoah_wb_pre_call()) &&)
+              SHENANDOAHGC_ONLY((!UseShenandoahGC || !ShenandoahBarrierSetC2::is_shenandoah_wb_pre_call(n)) &&)
               !(n->is_ArrayCopy() &&
                 n->as_ArrayCopy()->is_clonebasic() &&
                 n->in(ArrayCopyNode::Dest) == use)) {
@@ -943,16 +944,14 @@ void PhaseMacroExpand::process_users_of_allocation(CallNode *alloc) {
             if (membar_after->is_MemBar()) {
               disconnect_projections(membar_after->as_MemBar(), _igvn);
             }
-#if INCLUDE_SHENANDOAHGC
-          } else if (UseShenandoahGC && n->is_shenandoah_wb_pre_call()) {
-            C->shenandoah_eliminate_wb_pre(n, &_igvn);
-#endif
           } else {
             eliminate_gc_barrier(n);
           }
           k -= (oc2 - use->outcnt());
         }
-        _igvn.remove_dead_node(use);
+        if (UseShenandoahGC) {
+          _igvn.remove_dead_node(use);
+        }
       } else if (use->is_ArrayCopy()) {
         // Disconnect ArrayCopy node
         ArrayCopyNode* ac = use->as_ArrayCopy();

@@ -33,7 +33,7 @@
 #include "gc/shenandoah/shenandoahBarrierSet.inline.hpp"
 #include "gc/shenandoah/shenandoahCollectionSet.hpp"
 #include "gc/shenandoah/shenandoahCollectionSet.inline.hpp"
-#include "gc/shenandoah/shenandoahConnectionMatrix.inline.hpp"
+#include "gc/shenandoah/shenandoahWorkGroup.hpp"
 #include "gc/shenandoah/shenandoahHeap.hpp"
 #include "gc/shenandoah/shenandoahHeapRegionSet.inline.hpp"
 #include "gc/shenandoah/shenandoahHeapRegion.inline.hpp"
@@ -72,6 +72,14 @@ inline bool ShenandoahHeap::has_forwarded_objects() const {
   return _gc_state.is_set(HAS_FORWARDED);
 }
 
+inline WorkGang* ShenandoahHeap::workers() const {
+  return _workers;
+}
+
+inline WorkGang* ShenandoahHeap::get_safepoint_workers() {
+  return _safepoint_workers;
+}
+
 inline size_t ShenandoahHeap::heap_region_index_containing(const void* addr) const {
   uintptr_t region_start = ((uintptr_t) addr);
   uintptr_t index = (region_start - (uintptr_t) base()) >> ShenandoahHeapRegion::region_size_bytes_shift();
@@ -89,7 +97,7 @@ inline ShenandoahHeapRegion* const ShenandoahHeap::heap_region_containing(const 
 template <class T>
 inline oop ShenandoahHeap::update_with_forwarded_not_null(T* p, oop obj) {
   if (in_collection_set(obj)) {
-    shenandoah_assert_forwarded_except(p, obj, is_full_gc_in_progress() || cancelled_gc());
+    shenandoah_assert_forwarded_except(p, obj, is_full_gc_in_progress() || cancelled_gc() || is_degenerated_gc_in_progress());
     obj = ShenandoahBarrierSet::resolve_forwarded_not_null(obj);
     RawAccess<IS_NOT_NULL>::oop_store(p, obj);
   }
@@ -147,7 +155,7 @@ inline oop ShenandoahHeap::atomic_compare_exchange_oop(oop n, narrowOop* addr, o
 
 template <class T>
 inline oop ShenandoahHeap::maybe_update_with_forwarded_not_null(T* p, oop heap_oop) {
-  shenandoah_assert_not_in_cset_loc_except(p, !is_in(p) || is_full_gc_in_progress());
+  shenandoah_assert_not_in_cset_loc_except(p, !is_in(p) || is_full_gc_in_progress() || is_degenerated_gc_in_progress());
   shenandoah_assert_correct(p, heap_oop);
 
   if (in_collection_set(heap_oop)) {
@@ -157,11 +165,8 @@ inline oop ShenandoahHeap::maybe_update_with_forwarded_not_null(T* p, oop heap_o
       return forwarded_oop;
     }
 
-    shenandoah_assert_forwarded_except(p, heap_oop, is_full_gc_in_progress());
+    shenandoah_assert_forwarded_except(p, heap_oop, is_full_gc_in_progress() || is_degenerated_gc_in_progress());
     shenandoah_assert_not_in_cset_except(p, forwarded_oop, cancelled_gc());
-
-    log_develop_trace(gc)("Updating old ref: " PTR_FORMAT " pointing to " PTR_FORMAT " to new ref: " PTR_FORMAT,
-                          p2i(p), p2i(heap_oop), p2i(forwarded_oop));
 
     // If this fails, another thread wrote to p before us, it will be logged in SATB and the
     // reference be updated later.
@@ -197,7 +202,6 @@ inline bool ShenandoahHeap::check_cancelled_gc_and_yield(bool sts_active) {
 
   jbyte prev = _cancelled_gc.cmpxchg(NOT_CANCELLED, CANCELLABLE);
   if (prev == CANCELLABLE || prev == NOT_CANCELLED) {
-
     if (SuspendibleThreadSet::should_yield()) {
       SuspendibleThreadSet::yield();
     }
@@ -279,7 +283,7 @@ inline oop ShenandoahHeap::evacuate_object(oop p, Thread* thread) {
       filler = allocate_from_gclab(thread, size_with_fwdptr);
     }
     if (filler == NULL) {
-      ShenandoahAllocationRequest req = ShenandoahAllocationRequest::for_shared_gc(size_with_fwdptr);
+      ShenandoahAllocRequest req = ShenandoahAllocRequest::for_shared_gc(size_with_fwdptr);
       filler = allocate_memory(req);
       alloc_from_gclab = false;
     }
@@ -302,23 +306,12 @@ inline oop ShenandoahHeap::evacuate_object(oop p, Thread* thread) {
   Copy::aligned_disjoint_words((HeapWord*) p, copy, size_no_fwdptr);
   BrooksPointer::initialize(oop(copy));
 
-  log_develop_trace(gc, compaction)("Copy object: " PTR_FORMAT " -> " PTR_FORMAT,
-                                    p2i(p), p2i(copy));
-
   // Try to install the new forwarding pointer.
   oop result = BrooksPointer::try_update_forwardee(p, copy_val);
 
   if (oopDesc::unsafe_equals(result, p)) {
     // Successfully evacuated. Our copy is now the public one!
-    log_develop_trace(gc, compaction)("Copy object: " PTR_FORMAT " -> " PTR_FORMAT " succeeded",
-                                      p2i(p), p2i(copy));
-
-
-#ifdef ASSERT
-    assert(oopDesc::is_oop(copy_val), "expect oop");
-    assert(p->klass() == copy_val->klass(), "Should have the same class p: "PTR_FORMAT", copy: "PTR_FORMAT,
-                                              p2i(p), p2i(copy));
-#endif
+    shenandoah_assert_correct(NULL, copy_val);
     return copy_val;
   }  else {
     // Failed to evacuate. We need to deal with the object that is left behind. Since this
@@ -337,23 +330,14 @@ inline oop ShenandoahHeap::evacuate_object(oop p, Thread* thread) {
     } else {
       fill_with_object(copy, size_no_fwdptr);
     }
-    log_develop_trace(gc, compaction)("Copy object: " PTR_FORMAT " -> " PTR_FORMAT " failed, use other: " PTR_FORMAT,
-                                      p2i(p), p2i(copy), p2i(result));
+    shenandoah_assert_correct(NULL, copy_val);
+    shenandoah_assert_correct(NULL, result);
     return result;
   }
 }
 
 inline bool ShenandoahHeap::requires_marking(const void* entry) const {
-  return ! _next_marking_context->is_marked(oop(entry));
-}
-
-bool ShenandoahHeap::region_in_collection_set(size_t region_index) const {
-  assert(collection_set() != NULL, "Sanity");
-  return collection_set()->is_in(region_index);
-}
-
-bool ShenandoahHeap::in_collection_set(ShenandoahHeapRegion* r) const {
-  return region_in_collection_set(r->region_number());
+  return !_marking_context->is_marked(oop(entry));
 }
 
 template <class T>
@@ -411,18 +395,15 @@ inline void ShenandoahHeap::marked_object_iterate(ShenandoahHeapRegion* region, 
 }
 
 template<class T>
-inline void ShenandoahHeap::marked_object_safe_iterate(ShenandoahHeapRegion* region, T* cl) {
-  marked_object_iterate(region, cl, region->concurrent_iteration_safe_limit());
-}
-
-template<class T>
 inline void ShenandoahHeap::marked_object_iterate(ShenandoahHeapRegion* region, T* cl, HeapWord* limit) {
   assert(BrooksPointer::word_offset() < 0, "skip_delta calculation below assumes the forwarding ptr is before obj");
   assert(! region->is_humongous_continuation(), "no humongous continuation regions here");
 
   ShenandoahMarkingContext* const ctx = complete_marking_context();
+  assert(ctx->is_complete(), "sanity");
+
   MarkBitMap* mark_bit_map = ctx->mark_bit_map();
-  HeapWord* tams = ctx->top_at_mark_start(region->region_number());
+  HeapWord* tams = ctx->top_at_mark_start(region);
 
   size_t skip_bitmap_delta = BrooksPointer::word_size() + 1;
   size_t skip_objsize_delta = BrooksPointer::word_size() /* + actual obj.size() below */;
@@ -469,7 +450,9 @@ inline void ShenandoahHeap::marked_object_iterate(ShenandoahHeapRegion* region, 
         assert (slots[c] < tams,  "only objects below TAMS here: "  PTR_FORMAT " (" PTR_FORMAT ")", p2i(slots[c]), p2i(tams));
         assert (slots[c] < limit, "only objects below limit here: " PTR_FORMAT " (" PTR_FORMAT ")", p2i(slots[c]), p2i(limit));
         oop obj = oop(slots[c]);
-        do_object_marked_complete(cl, obj);
+        assert(oopDesc::is_oop(obj), "sanity");
+        assert(ctx->is_marked(obj), "object expected to be marked");
+        cl->do_object(obj);
       }
     } while (avail > 0);
   } else {
@@ -477,7 +460,9 @@ inline void ShenandoahHeap::marked_object_iterate(ShenandoahHeapRegion* region, 
       assert (cb < tams,  "only objects below TAMS here: "  PTR_FORMAT " (" PTR_FORMAT ")", p2i(cb), p2i(tams));
       assert (cb < limit, "only objects below limit here: " PTR_FORMAT " (" PTR_FORMAT ")", p2i(cb), p2i(limit));
       oop obj = oop(cb);
-      do_object_marked_complete(cl, obj);
+      assert(oopDesc::is_oop(obj), "sanity");
+      assert(ctx->is_marked(obj), "object expected to be marked");
+      cl->do_object(obj);
       cb += skip_bitmap_delta;
       if (cb < limit_bitmap) {
         cb = mark_bit_map->getNextMarkedWordAddress(cb, limit_bitmap);
@@ -493,17 +478,12 @@ inline void ShenandoahHeap::marked_object_iterate(ShenandoahHeapRegion* region, 
     assert (cs > tams,  "only objects past TAMS here: "   PTR_FORMAT " (" PTR_FORMAT ")", p2i(cs), p2i(tams));
     assert (cs < limit, "only objects below limit here: " PTR_FORMAT " (" PTR_FORMAT ")", p2i(cs), p2i(limit));
     oop obj = oop(cs);
+    assert(oopDesc::is_oop(obj), "sanity");
+    assert(ctx->is_marked(obj), "object expected to be marked");
     int size = obj->size();
-    do_object_marked_complete(cl, obj);
+    cl->do_object(obj);
     cs += size + skip_objsize_delta;
   }
-}
-
-template<class T>
-inline void ShenandoahHeap::do_object_marked_complete(T* cl, oop obj) {
-  assert(oopDesc::is_oop(obj), "sanity");
-  assert(_complete_marking_context->is_marked(obj), "object expected to be marked");
-  cl->do_object(obj);
 }
 
 template <class T>
@@ -545,22 +525,29 @@ inline void ShenandoahHeap::marked_object_oop_iterate(ShenandoahHeapRegion* regi
   }
 }
 
-template<class T>
-inline void ShenandoahHeap::marked_object_oop_iterate(ShenandoahHeapRegion* region, T* cl) {
-  marked_object_oop_iterate(region, cl, region->top());
-}
-
-template<class T>
-inline void ShenandoahHeap::marked_object_oop_safe_iterate(ShenandoahHeapRegion* region, T* cl) {
-  marked_object_oop_iterate(region, cl, region->concurrent_iteration_safe_limit());
-}
-
 inline ShenandoahHeapRegion* const ShenandoahHeap::get_region(size_t region_idx) const {
-  if (region_idx >= _num_regions) {
-    return NULL;
-  } else {
+  if (region_idx < _num_regions) {
     return _regions[region_idx];
+  } else {
+    return NULL;
   }
+}
+
+inline void ShenandoahHeap::mark_complete_marking_context() {
+  _marking_context->mark_complete();
+}
+
+inline void ShenandoahHeap::mark_incomplete_marking_context() {
+  _marking_context->mark_incomplete();
+}
+
+inline ShenandoahMarkingContext* ShenandoahHeap::complete_marking_context() const {
+  assert (_marking_context->is_complete()," sanity");
+  return _marking_context;
+}
+
+inline ShenandoahMarkingContext* ShenandoahHeap::marking_context() const {
+  return _marking_context;
 }
 
 #endif // SHARE_VM_GC_SHENANDOAH_SHENANDOAHHEAP_INLINE_HPP

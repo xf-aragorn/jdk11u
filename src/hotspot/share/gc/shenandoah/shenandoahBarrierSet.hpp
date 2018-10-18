@@ -31,7 +31,6 @@
 
 class ShenandoahBarrierSet: public BarrierSet {
 private:
-
   enum ArrayCopyStoreValMode {
     NONE,
     READ_BARRIER,
@@ -43,7 +42,6 @@ private:
   ShenandoahHeap* _heap;
 
 public:
-
   ShenandoahBarrierSet(ShenandoahHeap* heap);
 
   inline static ShenandoahBarrierSet* barrier_set() {
@@ -59,10 +57,8 @@ public:
   bool is_a(BarrierSet::Name bsn);
 
   bool is_aligned(HeapWord* hw);
-  void resize_covered_region(MemRegion mr);
 
   void write_ref_array(HeapWord* start, size_t count);
-  void write_ref_array_work(MemRegion r);
 
   template <class T> void
   write_ref_array_pre_work(T* dst, size_t count);
@@ -70,7 +66,6 @@ public:
   void write_ref_array_pre(oop* dst, size_t count, bool dest_uninitialized);
 
   void write_ref_array_pre(narrowOop* dst, size_t count, bool dest_uninitialized);
-
 
   // We export this to make it available in cases where the static
   // type of the barrier set is known.  Note that it is non-virtual.
@@ -109,7 +104,7 @@ public:
 private:
   inline bool need_update_refs_barrier();
 
-  template <class T, bool UPDATE_MATRIX, bool STOREVAL_WRITE_BARRIER>
+  template <class T, bool STOREVAL_WRITE_BARRIER>
   void write_ref_array_loop(HeapWord* start, size_t count);
 
   oop write_barrier_impl(oop obj);
@@ -125,24 +120,20 @@ private:
 
   template <typename T>
   bool arraycopy_loop_1(T* src, T* dst, size_t length, Klass* bound,
-                        bool checkcast, bool satb, bool matrix, ShenandoahBarrierSet::ArrayCopyStoreValMode storeval_mode);
+                        bool checkcast, bool satb, ShenandoahBarrierSet::ArrayCopyStoreValMode storeval_mode);
 
   template <typename T, bool CHECKCAST>
   bool arraycopy_loop_2(T* src, T* dst, size_t length, Klass* bound,
-                        bool satb, bool matrix, ShenandoahBarrierSet::ArrayCopyStoreValMode storeval_mode);
+                        bool satb, ShenandoahBarrierSet::ArrayCopyStoreValMode storeval_mode);
 
   template <typename T, bool CHECKCAST, bool SATB>
   bool arraycopy_loop_3(T* src, T* dst, size_t length, Klass* bound,
-                        bool matrix, ShenandoahBarrierSet::ArrayCopyStoreValMode storeval_mode);
-
-  template <typename T, bool CHECKCAST, bool SATB, bool MATRIX>
-  bool arraycopy_loop_4(T* src, T* dst, size_t length, Klass* bound,
                         ShenandoahBarrierSet::ArrayCopyStoreValMode storeval_mode);
 
-  template <typename T, bool CHECKCAST, bool SATB, bool MATRIX, ShenandoahBarrierSet::ArrayCopyStoreValMode STOREVAL_MODE>
+  template <typename T, bool CHECKCAST, bool SATB, ShenandoahBarrierSet::ArrayCopyStoreValMode STOREVAL_MODE>
   bool arraycopy_loop(T* src, T* dst, size_t length, Klass* bound);
 
-  template <typename T, bool CHECKCAST, bool SATB, bool MATRIX, ShenandoahBarrierSet::ArrayCopyStoreValMode STOREVAL_MODE>
+  template <typename T, bool CHECKCAST, bool SATB, ShenandoahBarrierSet::ArrayCopyStoreValMode STOREVAL_MODE>
   bool arraycopy_element(T* cur_src, T* cur_dst, Klass* bound, Thread* thread);
 
 public:

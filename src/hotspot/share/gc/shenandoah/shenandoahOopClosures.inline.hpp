@@ -28,24 +28,19 @@
 #include "gc/shenandoah/shenandoahConcurrentMark.inline.hpp"
 #include "gc/shenandoah/shenandoahTraversalGC.inline.hpp"
 
-template<class T, UpdateRefsMode UPDATE_REFS, bool STRING_DEDUP>
+template<class T, UpdateRefsMode UPDATE_REFS, StringDedupMode STRING_DEDUP>
 inline void ShenandoahMarkRefsSuperClosure::work(T *p) {
   ShenandoahConcurrentMark::mark_through_ref<T, UPDATE_REFS, STRING_DEDUP>(p, _heap, _queue, _mark_context);
 }
 
-template <class T, bool UPDATE_MATRIX>
+template <class T>
 inline void ShenandoahUpdateHeapRefsSuperClosure::work(T* p) {
-  oop obj = _heap->maybe_update_with_forwarded(p);
-  if (UPDATE_MATRIX) {
-    if (!CompressedOops::is_null(obj)) {
-      _heap->connection_matrix()->set_connected(p, obj);
-    }
-  }
+  _heap->maybe_update_with_forwarded(p);
 }
 
-template <class T, bool STRING_DEDUP, bool DEGEN, bool MATRIX>
+template <class T, bool STRING_DEDUP, bool DEGEN>
 inline void ShenandoahTraversalSuperClosure::work(T* p) {
-  _traversal_gc->process_oop<T, STRING_DEDUP, DEGEN, MATRIX>(p, _thread, _queue, _mark_context, _base_obj);
+  _traversal_gc->process_oop<T, STRING_DEDUP, DEGEN>(p, _thread, _queue, _mark_context);
 }
 
 #endif // SHARE_VM_GC_SHENANDOAH_SHENANDOAHOOPCLOSURES_INLINE_HPP
