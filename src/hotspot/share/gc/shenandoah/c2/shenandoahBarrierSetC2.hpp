@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -25,6 +25,7 @@
 #define SHARE_VM_GC_SHENANDOAH_C2_SHENANDOAHBARRIERSETC2_HPP
 
 #include "gc/shared/c2/barrierSetC2.hpp"
+#include "gc/shenandoah/c2/shenandoahSupport.hpp"
 #include "utilities/growableArray.hpp"
 
 class ShenandoahBarrierSetC2State : public ResourceObj {
@@ -93,8 +94,6 @@ public:
   static bool has_only_shenandoah_wb_pre_uses(Node* n);
 
   ShenandoahBarrierSetC2State* state() const;
-
-  Node* shenandoah_read_barrier_acmp(GraphKit* kit, Node* obj);
 
   static const TypeFunc* write_ref_field_pre_entry_Type();
   static const TypeFunc* shenandoah_clone_barrier_Type();

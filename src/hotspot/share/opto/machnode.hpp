@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -311,7 +311,7 @@ public:
   // This method is free to ignore stack slots if that helps.
   #define TYPE_PTR_SENTINAL  ((const TypePtr*)-1)
   // Passing TYPE_PTR_SENTINAL as adr_type asks for computation of the adr_type if possible
-  Node* get_base_and_disp(intptr_t &offset, const TypePtr* &adr_type) const;
+  const Node* get_base_and_disp(intptr_t &offset, const TypePtr* &adr_type) const;
 
   // Helper for get_base_and_disp: find the base and index input nodes.
   // Returns the MachOper as determined by memory_operand(), for use, if

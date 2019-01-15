@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2018, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2017, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -37,8 +37,10 @@ class ShenandoahParallelCodeHeapIterator {
   friend class CodeCache;
 private:
   CodeHeap*     _heap;
+  DEFINE_PAD_MINUS_SIZE(0, DEFAULT_CACHE_LINE_SIZE, sizeof(volatile int));
   volatile int  _claimed_idx;
   volatile bool _finished;
+  DEFINE_PAD_MINUS_SIZE(1, DEFAULT_CACHE_LINE_SIZE, 0);
 public:
   ShenandoahParallelCodeHeapIterator(CodeHeap* heap);
   void parallel_blobs_do(CodeBlobClosure* f);
@@ -89,7 +91,9 @@ protected:
   ShenandoahHeap* _heap;
   ShenandoahParallelCodeCacheIterator _par_iterator;
   ShenandoahSharedFlag _seq_claimed;
+  DEFINE_PAD_MINUS_SIZE(0, DEFAULT_CACHE_LINE_SIZE, sizeof(volatile size_t));
   volatile size_t _claimed;
+  DEFINE_PAD_MINUS_SIZE(1, DEFAULT_CACHE_LINE_SIZE, 0);
 protected:
   ShenandoahCodeRootsIterator();
   ~ShenandoahCodeRootsIterator();
@@ -136,11 +140,17 @@ public:
   static ShenandoahCsetCodeRootsIterator cset_iterator();
 
 private:
-  static volatile int _recorded_nms_lock;
+  struct PaddedLock {
+    DEFINE_PAD_MINUS_SIZE(0, DEFAULT_CACHE_LINE_SIZE, sizeof(volatile int));
+    volatile int _lock;
+    DEFINE_PAD_MINUS_SIZE(1, DEFAULT_CACHE_LINE_SIZE, 0);
+  };
+
+  static PaddedLock _recorded_nms_lock;
   static GrowableArray<ShenandoahNMethod*>* _recorded_nms;
 
   static void acquire_lock(bool write) {
-    volatile int* loc = &_recorded_nms_lock;
+    volatile int* loc = &_recorded_nms_lock._lock;
     if (write) {
       while ((OrderAccess::load_acquire(loc) != 0) ||
              Atomic::cmpxchg(-1, loc, 0) != 0) {
@@ -163,7 +173,7 @@ private:
   }
 
   static void release_lock(bool write) {
-    volatile int* loc = &ShenandoahCodeRoots::_recorded_nms_lock;
+    volatile int* loc = &ShenandoahCodeRoots::_recorded_nms_lock._lock;
     if (write) {
       OrderAccess::release_store_fence(loc, 0);
     } else {

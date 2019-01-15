@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2017, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2013, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -31,7 +31,6 @@
 #include "gc/shared/gcTimer.hpp"
 #include "gc/shared/referenceProcessor.hpp"
 #include "gc/shared/referenceProcessorPhaseTimes.hpp"
-#include "gc/shared/suspendibleThreadSet.hpp"
 
 #include "gc/shenandoah/shenandoahBarrierSet.inline.hpp"
 #include "gc/shenandoah/shenandoahConcurrentMark.inline.hpp"
@@ -42,10 +41,12 @@
 #include "gc/shenandoah/shenandoahOopClosures.inline.hpp"
 #include "gc/shenandoah/shenandoahTaskqueue.hpp"
 #include "gc/shenandoah/shenandoahTaskqueue.inline.hpp"
+#include "gc/shenandoah/shenandoahTimingTracker.hpp"
 #include "gc/shenandoah/shenandoahUtils.hpp"
 #include "gc/shared/weakProcessor.hpp"
 
 #include "memory/iterator.inline.hpp"
+#include "memory/metaspace.hpp"
 #include "memory/resourceArea.hpp"
 #include "oops/oop.inline.hpp"
 
@@ -92,7 +93,7 @@ public:
 
   void work(uint worker_id) {
     assert(ShenandoahSafepoint::is_at_shenandoah_safepoint(), "Must be at a safepoint");
-    ShenandoahWorkerSession worker_session(worker_id);
+    ShenandoahParallelWorkerSession worker_session(worker_id);
 
     ShenandoahHeap* heap = ShenandoahHeap::heap();
     ShenandoahObjToScanQueueSet* queues = heap->concurrent_mark()->task_queues();
@@ -164,7 +165,7 @@ public:
 
   void work(uint worker_id) {
     assert(ShenandoahSafepoint::is_at_shenandoah_safepoint(), "Must be at a safepoint");
-    ShenandoahWorkerSession worker_session(worker_id);
+    ShenandoahParallelWorkerSession worker_session(worker_id);
 
     ShenandoahHeap* heap = ShenandoahHeap::heap();
     ShenandoahUpdateRefsClosure cl;
@@ -199,8 +200,8 @@ public:
 
   void work(uint worker_id) {
     ShenandoahHeap* heap = ShenandoahHeap::heap();
-    ShenandoahWorkerSession worker_session(worker_id);
-    SuspendibleThreadSetJoiner stsj(ShenandoahSuspendibleWorkers);
+    ShenandoahConcurrentWorkerSession worker_session(worker_id);
+    ShenandoahSuspendibleThreadSetJoiner stsj(ShenandoahSuspendibleWorkers);
     ShenandoahObjToScanQueue* q = _cm->get_queue(worker_id);
     ReferenceProcessor* rp;
     if (heap->process_references()) {
@@ -255,7 +256,7 @@ public:
   void work(uint worker_id) {
     ShenandoahHeap* heap = ShenandoahHeap::heap();
 
-    ShenandoahWorkerSession worker_session(worker_id);
+    ShenandoahParallelWorkerSession worker_session(worker_id);
     // First drain remaining SATB buffers.
     // Notice that this is not strictly necessary for mark-compact. But since
     // it requires a StrongRootsScope around the task, we need to claim the
@@ -469,6 +470,9 @@ void ShenandoahConcurrentMark::finish_mark_from_roots(bool full_gc) {
   assert(task_queues()->is_empty(), "Should be empty");
   TASKQUEUE_STATS_ONLY(task_queues()->print_taskqueue_stats());
   TASKQUEUE_STATS_ONLY(task_queues()->reset_taskqueue_stats());
+
+  // Resize Metaspace
+  MetaspaceGC::compute_new_size();
 }
 
 // Weak Reference Closures
@@ -634,11 +638,7 @@ public:
     cm->task_queues()->reserve(nworkers);
     ShenandoahTaskTerminator terminator(nworkers, cm->task_queues());
     ShenandoahRefProcTaskProxy proc_task_proxy(task, &terminator);
-    if (nworkers == 1) {
-      proc_task_proxy.work(0);
-    } else {
-      _workers->run_task(&proc_task_proxy);
-    }
+    _workers->run_task(&proc_task_proxy);
   }
 };
 
@@ -689,6 +689,14 @@ void ShenandoahConcurrentMark::weak_refs_work_doit(bool full_gc) {
 
   assert(task_queues()->is_empty(), "Should be empty");
 
+  // complete_gc and keep_alive closures instantiated here are only needed for
+  // single-threaded path in RP. They share the queue 0 for tracking work, which
+  // simplifies implementation. Since RP may decide to call complete_gc several
+  // times, we need to be able to reuse the terminator.
+  uint serial_worker_id = 0;
+  ShenandoahTaskTerminator terminator(1, task_queues());
+  ShenandoahCMDrainMarkingStackClosure complete_gc(serial_worker_id, &terminator, /* reset_terminator = */ true);
+
   ShenandoahRefProcTaskExecutor executor(workers);
 
   ReferenceProcessorPhaseTimes pt(_heap->gc_timer(), rp->num_queues());
@@ -697,24 +705,24 @@ void ShenandoahConcurrentMark::weak_refs_work_doit(bool full_gc) {
     ShenandoahGCPhase phase(phase_process);
     ShenandoahTerminationTracker phase_term(phase_process_termination);
 
-    // We don't use single-threaded closures, because we distinguish this
-    // in the executor. Assert that we should never actually get there.
-    ShouldNotReachHereBoolObjectClosure should_not_reach_here_is_alive;
-    ShouldNotReachHereOopClosure should_not_reach_here_keep_alive;
-    ShouldNotReachHereVoidClosure should_not_reach_here_complete;
-    rp->process_discovered_references(&should_not_reach_here_is_alive,
-                                      &should_not_reach_here_keep_alive,
-                                      &should_not_reach_here_complete,
-                                      &executor, &pt);
-
     // Process leftover weak oops: update them, if needed, or assert they do not
     // need updating otherwise. This JDK version does not have parallel WeakProcessor.
     // Weak processor API requires us to visit the oops, even if we are not doing
     // anything to them.
     if (_heap->has_forwarded_objects()) {
+      ShenandoahCMKeepAliveUpdateClosure keep_alive(get_queue(serial_worker_id));
+      rp->process_discovered_references(is_alive.is_alive_closure(), &keep_alive,
+                                        &complete_gc, &executor,
+                                        &pt);
+
       ShenandoahWeakUpdateClosure cl;
       WeakProcessor::weak_oops_do(is_alive.is_alive_closure(), &cl);
     } else {
+      ShenandoahCMKeepAliveClosure keep_alive(get_queue(serial_worker_id));
+      rp->process_discovered_references(is_alive.is_alive_closure(), &keep_alive,
+                                        &complete_gc, &executor,
+                                        &pt);
+
       ShenandoahWeakAssertNotForwardedClosure cl;
       WeakProcessor::weak_oops_do(is_alive.is_alive_closure(), &cl);
     }
@@ -782,6 +790,7 @@ public:
 
   void work(uint worker_id) {
     assert(worker_id == 0, "The code below is single-threaded, only one worker is expected");
+    ShenandoahParallelWorkerSession worker_session(worker_id);
 
     ShenandoahHeap* sh = ShenandoahHeap::heap();
 
@@ -933,8 +942,6 @@ void ShenandoahConcurrentMark::mark_loop_work(T* cl, jushort* live_data, uint wo
   q = queues->claim_next();
   while (q != NULL) {
     if (CANCELLABLE && heap->check_cancelled_gc_and_yield()) {
-      ShenandoahCancelledTerminatorTerminator tt;
-      while (!terminator->offer_termination(&tt));
       return;
     }
 
@@ -958,8 +965,6 @@ void ShenandoahConcurrentMark::mark_loop_work(T* cl, jushort* live_data, uint wo
    */
   while (true) {
     if (CANCELLABLE && heap->check_cancelled_gc_and_yield()) {
-      ShenandoahCancelledTerminatorTerminator tt;
-      while (!terminator->offer_termination(&tt));
       return;
     }
 
@@ -981,9 +986,10 @@ void ShenandoahConcurrentMark::mark_loop_work(T* cl, jushort* live_data, uint wo
     if (work == 0) {
       // No work encountered in current stride, try to terminate.
       // Need to leave the STS here otherwise it might block safepoints.
-      SuspendibleThreadSetLeaver stsl(CANCELLABLE && ShenandoahSuspendibleWorkers);
+      ShenandoahSuspendibleThreadSetLeaver stsl(CANCELLABLE && ShenandoahSuspendibleWorkers);
       ShenandoahTerminationTimingsTracker term_tracker(worker_id);
-      if (terminator->offer_termination()) return;
+      ShenandoahTerminatorTerminator tt(heap);
+      if (terminator->offer_termination(&tt)) return;
     }
   }
 }

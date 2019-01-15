@@ -45,7 +45,7 @@
 #include "runtime/sharedRuntime.hpp"
 #include "utilities/macros.hpp"
 #if INCLUDE_SHENANDOAHGC
-#include "gc/shenandoah/c2/shenandoahSupport.hpp"
+#include "gc/shenandoah/c2/shenandoahBarrierSetC2.hpp"
 #endif
 
 //----------------------------GraphKit-----------------------------------------
@@ -3970,7 +3970,6 @@ void GraphKit::inflate_string(Node* src, Node* dst, const TypeAryPtr* dst_type, 
 }
 
 void GraphKit::inflate_string_slow(Node* src, Node* dst, Node* start, Node* count) {
-
   src = access_resolve_for_read(src);
   dst = access_resolve_for_write(dst);
 

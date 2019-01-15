@@ -74,7 +74,6 @@ class PhaseCCP;
 class PhaseCCP_DCE;
 class RootNode;
 class relocInfo;
-class ShenandoahWriteBarrierNode;
 class Scope;
 class StartNode;
 class SafePointNode;
@@ -434,6 +433,7 @@ class Compile : public Phase {
 #ifndef PRODUCT
   IdealGraphPrinter*    _printer;
 #endif
+
 
   // Node management
   uint                  _unique;                // Counter for unique Node indices

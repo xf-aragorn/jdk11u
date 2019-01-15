@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2016, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -246,7 +246,10 @@ typedef Padded<ShenandoahBufferedOverflowTaskQueue> ShenandoahObjToScanQueue;
 template <class T, MEMFLAGS F>
 class ParallelClaimableQueueSet: public GenericTaskQueueSet<T, F> {
 private:
+  DEFINE_PAD_MINUS_SIZE(0, DEFAULT_CACHE_LINE_SIZE, sizeof(volatile jint));
   volatile jint     _claimed_index;
+  DEFINE_PAD_MINUS_SIZE(1, DEFAULT_CACHE_LINE_SIZE, 0);
+
   debug_only(uint   _reserved;  )
 
 public:
@@ -302,9 +305,12 @@ public:
 };
 
 class ShenandoahTerminatorTerminator : public TerminatorTerminator {
+private:
+  ShenandoahHeap* const _heap;
 public:
+  ShenandoahTerminatorTerminator(ShenandoahHeap* const heap) : _heap(heap) { }
   // return true, terminates immediately, even if there's remaining work left
-  virtual bool should_force_termination() { return false; }
+  virtual bool should_exit_termination() { return _heap->cancelled_gc(); }
 };
 
 /*
@@ -353,15 +359,6 @@ private:
    * otherwise, return false
    */
   bool do_spin_master_work(ShenandoahTerminatorTerminator* terminator);
-};
-
-class ShenandoahCancelledTerminatorTerminator : public ShenandoahTerminatorTerminator {
-  virtual bool should_exit_termination() {
-    return false;
-  }
-  virtual bool should_force_termination() {
-    return true;
-  }
 };
 
 #endif // SHARE_VM_GC_SHENANDOAH_SHENANDOAHTASKQUEUE_HPP

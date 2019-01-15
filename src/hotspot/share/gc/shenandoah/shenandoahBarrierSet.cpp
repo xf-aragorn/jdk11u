@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2018, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2013, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -75,7 +75,7 @@ ShenandoahBarrierSet::ShenandoahBarrierSet(ShenandoahHeap* heap) :
   BarrierSet(make_barrier_set_assembler<ShenandoahBarrierSetAssembler>(),
              make_barrier_set_c1<ShenandoahBarrierSetC1>(),
              make_barrier_set_c2<ShenandoahBarrierSetC2>(),
-             BarrierSet::FakeRtti(BarrierSet::Shenandoah)),
+             BarrierSet::FakeRtti(BarrierSet::ShenandoahBarrierSet)),
   _heap(heap)
 {
 }
@@ -85,7 +85,7 @@ void ShenandoahBarrierSet::print_on(outputStream* st) const {
 }
 
 bool ShenandoahBarrierSet::is_a(BarrierSet::Name bsn) {
-  return bsn == BarrierSet::Shenandoah;
+  return bsn == BarrierSet::ShenandoahBarrierSet;
 }
 
 bool ShenandoahBarrierSet::is_aligned(HeapWord* hw) {
@@ -256,7 +256,7 @@ oop ShenandoahBarrierSet::write_barrier_mutator(oop obj) {
       ShenandoahHeapRegion* r = _heap->heap_region_containing(obj);
       assert(r->is_cset(), "sanity");
 
-      HeapWord* cur = (HeapWord*)obj + obj->size() + BrooksPointer::word_size();
+      HeapWord* cur = (HeapWord*)obj + obj->size() + ShenandoahBrooksPointer::word_size();
 
       size_t count = 0;
       while ((cur < r->top()) && ctx->is_marked(oop(cur)) && (count++ < max)) {
@@ -264,7 +264,7 @@ oop ShenandoahBarrierSet::write_barrier_mutator(oop obj) {
         if (oopDesc::unsafe_equals(cur_oop, resolve_forwarded_not_null(cur_oop))) {
           _heap->evacuate_object(cur_oop, thread);
         }
-        cur = cur + cur_oop->size() + BrooksPointer::word_size();
+        cur = cur + cur_oop->size() + ShenandoahBrooksPointer::word_size();
       }
     }
 
@@ -297,7 +297,7 @@ oop ShenandoahBarrierSet::write_barrier_impl(oop obj) {
 }
 
 oop ShenandoahBarrierSet::write_barrier(oop obj) {
-  if (ShenandoahWriteBarrier) {
+  if (ShenandoahWriteBarrier && _heap->has_forwarded_objects()) {
     return write_barrier_impl(obj);
   } else {
     return obj;

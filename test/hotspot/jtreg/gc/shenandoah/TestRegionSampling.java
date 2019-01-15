@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2017, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -23,6 +23,7 @@
 
 /*
  * @test TestRegionSampling
+ * @requires vm.gc.Shenandoah
  *
  * @run main/othervm -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions -XX:+UseShenandoahGC -Xmx1g -Xms1g                                         -XX:+ShenandoahRegionSampling TestRegionSampling
  * @run main/othervm -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions -XX:+UseShenandoahGC -Xmx1g -Xms1g -XX:ShenandoahGCHeuristics=passive      -XX:+ShenandoahRegionSampling TestRegionSampling
@@ -38,15 +39,15 @@
 
 public class TestRegionSampling {
 
-  static final long TARGET_MB = Long.getLong("target", 2_000); // 2 Gb allocation
+    static final long TARGET_MB = Long.getLong("target", 2_000); // 2 Gb allocation
 
-  static volatile Object sink;
+    static volatile Object sink;
 
-  public static void main(String[] args) throws Exception {
-    long count = TARGET_MB * 1024 * 1024 / 16;
-    for (long c = 0; c < count; c++) {
-      sink = new Object();
+    public static void main(String[] args) throws Exception {
+        long count = TARGET_MB * 1024 * 1024 / 16;
+        for (long c = 0; c < count; c++) {
+            sink = new Object();
+        }
     }
-  }
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2015, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -25,6 +25,7 @@
 #define SHARE_VM_GC_SHENANDOAH_SHENANDOAHROOTPROCESSOR_HPP
 
 #include "code/codeCache.hpp"
+#include "gc/shared/oopStorageParState.hpp"
 #include "gc/shenandoah/shenandoahCodeRoots.hpp"
 #include "gc/shenandoah/shenandoahHeap.hpp"
 #include "gc/shenandoah/shenandoahPhaseTimings.hpp"
@@ -100,10 +101,16 @@ public:
 };
 
 class ShenandoahRootEvacuator : public StackObj {
+  SubTasksDone* _evacuation_tasks;
   StrongRootsScope _srs;
   ShenandoahPhaseTimings::Phase _phase;
   ShenandoahCsetCodeRootsIterator _coderoots_cset_iterator;
 
+  enum Shenandoah_evacuate_roots_tasks {
+      SHENANDOAH_EVAC_jvmti_oops_do,
+      // Leave this one last.
+      SHENANDOAH_EVAC_NumElements
+  };
 public:
   ShenandoahRootEvacuator(ShenandoahHeap* heap, uint n_workers,
                           ShenandoahPhaseTimings::Phase phase);

@@ -59,8 +59,9 @@
 #include "utilities/macros.hpp"
 #include "utilities/macros.hpp"
 #if INCLUDE_SHENANDOAHGC
-#include "gc/shenandoah/c2/shenandoahSupport.hpp"
+#include "gc/shenandoah/c2/shenandoahBarrierSetC2.hpp"
 #endif
+
 
 class LibraryIntrinsic : public InlineCallGenerator {
   // Extend the set of intrinsics known to the runtime:

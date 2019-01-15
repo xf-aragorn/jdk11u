@@ -56,7 +56,6 @@ import jdk.test.lib.hprof.model.Snapshot;
  *          jdk.hotspot.agent/sun.jvm.hotspot.oops
  *          jdk.hotspot.agent/sun.jvm.hotspot.debugger
  * @run main/othervm TestHeapDumpForInvokeDynamic
- * @run main/othervm -XX:+UnlockExperimentalVMOptions -XX:+UseShenandoahGC TestHeapDumpForInvokeDynamic
  */
 
 public class TestHeapDumpForInvokeDynamic {
@@ -124,6 +123,7 @@ public class TestHeapDumpForInvokeDynamic {
         try {
             List<String> vmArgs = new ArrayList<String>();
             vmArgs.add("-XX:+UsePerfData");
+            vmArgs.add("-Xmx512m");
             vmArgs.addAll(Utils.getVmOptions());
 
             theApp = new LingeredAppWithInvokeDynamic();

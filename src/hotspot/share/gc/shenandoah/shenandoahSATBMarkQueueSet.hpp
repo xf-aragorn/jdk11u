@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -27,6 +27,12 @@
 #include "gc/g1/satbMarkQueue.hpp"
 #include "runtime/mutex.hpp"
 #include "runtime/thread.hpp"
+
+class ShenandoahSATBMarkQueue: public SATBMarkQueue {
+public:
+  ShenandoahSATBMarkQueue(SATBMarkQueueSet* qset) : SATBMarkQueue(qset, /* permanent = */ false) {}
+  virtual bool should_enqueue_buffer();
+};
 
 class ShenandoahSATBMarkQueueSet : public SATBMarkQueueSet {
 public:

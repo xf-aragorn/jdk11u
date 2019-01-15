@@ -322,27 +322,39 @@ void PhaseIdealLoop::clone_loop_predicates_fix_mem(ProjNode* dom_proj , ProjNode
     for (DUIterator_Fast imax, i = dom_r->fast_outs(imax); i < imax; i++) {
       Node* dom_use = dom_r->fast_out(i);
       if (dom_use->is_Phi() && dom_use->bottom_type() == Type::MEMORY) {
-        assert(dom_use->adr_type() != TypePtr::BOTTOM, "no bottom memory phi");
+        assert(dom_use->in(0) == dom_r, "");
         Node* phi = NULL;
         for (DUIterator_Fast jmax, j = r->fast_outs(jmax); j < jmax; j++) {
           Node* use = r->fast_out(j);
           if (use->is_Phi() && use->bottom_type() == Type::MEMORY &&
               use->adr_type() == dom_use->adr_type()) {
+            assert(use->in(0) == r, "");
             assert(phi == NULL, "only one phi");
             phi = use;
           }
         }
         if (phi == NULL) {
+          const TypePtr* adr_type = dom_use->adr_type();
+          int alias = C->get_alias_index(adr_type);
           Node* call = r->unique_ctrl_out();
           Node* mem = call->in(TypeFunc::Memory);
           MergeMemNode* mm = NULL;
           if (mem->is_MergeMem()) {
             mm = mem->clone()->as_MergeMem();
+            if (adr_type == TypePtr::BOTTOM) {
+              mem = mem->as_MergeMem()->base_memory();
+            } else {
+              mem = mem->as_MergeMem()->memory_at(alias);
+            }
           } else {
             mm = MergeMemNode::make(mem);
           }
-          phi = PhiNode::make(r, mem, Type::MEMORY, dom_use->adr_type());
-          mm->set_memory_at(C->get_alias_index(phi->adr_type()), phi);
+          phi = PhiNode::make(r, mem, Type::MEMORY, adr_type);
+          if (adr_type == TypePtr::BOTTOM) {
+            mm->set_base_memory(phi);
+          } else {
+            mm->set_memory_at(alias, phi);
+          }
           if (loop_phase != NULL) {
             loop_phase->register_new_node(mm, r);
             loop_phase->register_new_node(phi, r);
@@ -361,9 +373,9 @@ void PhaseIdealLoop::clone_loop_predicates_fix_mem(ProjNode* dom_proj , ProjNode
 
 // Clone loop predicates to cloned loops (peeled, unswitched, split_if).
 Node* PhaseIdealLoop::clone_loop_predicates(Node* old_entry, Node* new_entry,
-                                            bool clone_limit_check,
-                                            PhaseIdealLoop* loop_phase,
-                                            PhaseIterGVN* igvn) {
+                                                bool clone_limit_check,
+                                                PhaseIdealLoop* loop_phase,
+                                                PhaseIterGVN* igvn) {
 #ifdef ASSERT
   if (new_entry == NULL || !(new_entry->is_Proj() || new_entry->is_Region() || new_entry->is_SafePoint())) {
     if (new_entry != NULL)
@@ -757,7 +769,11 @@ BoolNode* PhaseIdealLoop::rc_predicate(IdealLoopTree *loop, Node* ctrl,
   if ((stride > 0) == (scale > 0) == upper) {
     guarantee(limit != NULL, "sanity");
     if (TraceLoopPredicate) {
-      predString->print(limit->is_Con() ? "(%d " : "(limit ", con_limit);
+      if (limit->is_Con()) {
+        predString->print("(%d ", con_limit);
+      } else {
+        predString->print("(limit ");
+      }
       predString->print("- %d) ", stride);
     }
     // Check if (limit - stride) may overflow
@@ -783,7 +799,11 @@ BoolNode* PhaseIdealLoop::rc_predicate(IdealLoopTree *loop, Node* ctrl,
     register_new_node(max_idx_expr, ctrl);
   } else {
     if (TraceLoopPredicate) {
-      predString->print(init->is_Con() ? "%d " : "init ", con_init);
+      if (init->is_Con()) {
+        predString->print("%d ", con_init);
+      } else {
+        predString->print("init ");
+      }
     }
     idx_type = _igvn.type(init)->isa_int();
     max_idx_expr = init;
@@ -819,7 +839,11 @@ BoolNode* PhaseIdealLoop::rc_predicate(IdealLoopTree *loop, Node* ctrl,
 
   if (offset && (!offset->is_Con() || con_offset != 0)){
     if (TraceLoopPredicate) {
-      predString->print(offset->is_Con() ? "+ %d " : "+ offset", con_offset);
+      if (offset->is_Con()) {
+        predString->print("+ %d ", con_offset);
+      } else {
+        predString->print("+ offset");
+      }
     }
     // Check if (max_idx_expr + offset) may overflow
     const TypeInt* offset_type = _igvn.type(offset)->isa_int();
@@ -842,13 +866,6 @@ BoolNode* PhaseIdealLoop::rc_predicate(IdealLoopTree *loop, Node* ctrl,
       max_idx_expr = new AddINode(max_idx_expr, offset);
     }
     register_new_node(max_idx_expr, ctrl);
-    if (TraceLoopPredicate) {
-      if (offset->is_Con()) {
-        predString->print("+ %d ", offset->get_int());
-      } else {
-        predString->print("+ offset ");
-      }
-    }
   }
 
   CmpNode* cmp = NULL;

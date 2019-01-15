@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -36,6 +36,19 @@ ShenandoahAdaptiveHeuristics::ShenandoahAdaptiveHeuristics() :
   _cycle_gap_history(new TruncatedSeq(5)),
   _conc_mark_duration_history(new TruncatedSeq(5)),
   _conc_uprefs_duration_history(new TruncatedSeq(5)) {
+
+  SHENANDOAH_ERGO_ENABLE_FLAG(ExplicitGCInvokesConcurrent);
+  SHENANDOAH_ERGO_ENABLE_FLAG(ShenandoahImplicitGCInvokesConcurrent);
+
+  // Final configuration checks
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahSATBBarrier);
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahReadBarrier);
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahWriteBarrier);
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahStoreValReadBarrier);
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahKeepAliveBarrier);
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahCASBarrier);
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahAcmpBarrier);
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahCloneBarrier);
 }
 
 ShenandoahAdaptiveHeuristics::~ShenandoahAdaptiveHeuristics() {}

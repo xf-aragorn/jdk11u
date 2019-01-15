@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
+* Copyright (c) 2016, 2018, Oracle and/or its affiliates. All rights reserved.
 * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 *
 * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
  * @test TestGCOldWithShenandoah
  * @key gc
  * @key stress
+ * @requires vm.gc.Shenandoah & !vm.graal.enabled
  * @summary Stress the GC by trying to make old objects more likely to be garbage than young objects.
  *
  * @run main/othervm/timeout=600 -Xmx384M -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions -XX:+UseShenandoahGC -XX:ShenandoahGCHeuristics=passive       -XX:+ShenandoahDegeneratedGC -XX:+ShenandoahVerify TestGCOld 50 1 20 10 10000

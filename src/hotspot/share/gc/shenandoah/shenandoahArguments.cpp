@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2018, Red Hat, Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -69,6 +69,14 @@ void ShenandoahArguments::initialize() {
     warning("Large pages size (" SIZE_FORMAT "K) is too large to afford page-sized regions, disabling uncommit",
             os::large_page_size() / K);
     FLAG_SET_DEFAULT(ShenandoahUncommit, false);
+  }
+
+  // Enable NUMA by default. While Shenandoah is not NUMA-aware, enabling NUMA makes
+  // storage allocation code NUMA-aware, and NUMA interleaving makes the storage
+  // allocated in consistent manner (interleaving) to minimize run-to-run variance.
+  if (FLAG_IS_DEFAULT(UseNUMA)) {
+    FLAG_SET_DEFAULT(UseNUMA, true);
+    FLAG_SET_DEFAULT(UseNUMAInterleaving, true);
   }
 
   FLAG_SET_DEFAULT(ParallelGCThreads,

@@ -169,6 +169,10 @@ class ClassLoaderDataGraph : public AllStatic {
 #ifndef PRODUCT
   static bool contains_loader_data(ClassLoaderData* loader_data);
 #endif
+
+  // Check if ClassLoaderData is part of the ClassLoaderDataGraph (not unloaded)
+  // Usage without lock only allowed during error reporting.
+  static bool is_valid(ClassLoaderData* loader_data);
 };
 
 // ClassLoaderData class
@@ -213,7 +217,6 @@ class ClassLoaderData : public CHeapObj<mtClass> {
   friend class Klass;
   friend class MetaDataFactory;
   friend class Method;
-  friend class ParallelCLDRootIterator;
 
   static ClassLoaderData * _the_null_class_loader_data;
 

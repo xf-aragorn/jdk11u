@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -2540,7 +2540,7 @@ nmethod* SharedRuntime::generate_native_wrapper(MacroAssembler* masm,
   // Unpack native results.
   switch (ret_type) {
   case T_BOOLEAN: __ c2bool(rax);            break;
-  case T_CHAR   : __ movzwl(rax, rax);       break;
+  case T_CHAR   : __ movzwl(rax, rax);      break;
   case T_BYTE   : __ sign_extend_byte (rax); break;
   case T_SHORT  : __ sign_extend_short(rax); break;
   case T_INT    : /* nothing to do */        break;

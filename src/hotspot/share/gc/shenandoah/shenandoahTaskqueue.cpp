@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2016, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -89,8 +89,7 @@ bool ShenandoahTaskTerminator::offer_termination(ShenandoahTerminatorTerminator*
       }
     }
 
-    if (((terminator == NULL || terminator->should_force_termination()) && peek_in_queue_set()) ||
-      (terminator != NULL && terminator->should_exit_termination())) {
+    if (peek_in_queue_set() || (terminator != NULL && terminator->should_exit_termination())) {
       _offered_termination --;
       _blocker->unlock();
       return false;
@@ -209,7 +208,7 @@ bool ShenandoahTaskTerminator::do_spin_master_work(ShenandoahTerminatorTerminato
       _total_peeks++;
 #endif
     size_t tasks = tasks_in_queue_set();
-    if (tasks > 0 && (terminator == NULL || ! terminator->should_force_termination())) {
+    if (tasks > 0 || (terminator != NULL && terminator->should_exit_termination())) {
       MonitorLockerEx locker(_blocker, Mutex::_no_safepoint_check_flag);   // no safepoint check
 
       if (tasks >= _offered_termination - 1) {

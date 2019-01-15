@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -81,7 +81,6 @@ class GCCause : public AllStatic {
     _shenandoah_stop_vm,
     _shenandoah_allocation_failure_evac,
     _shenandoah_concurrent_gc,
-    _shenandoah_partial_gc,
     _shenandoah_traversal_gc,
     _shenandoah_upgrade_to_full_gc,
 

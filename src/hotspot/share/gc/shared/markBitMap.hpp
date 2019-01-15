@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -84,6 +84,9 @@ class MarkBitMapRO {
 };
 
 class MarkBitMap : public MarkBitMapRO {
+ private:
+  // Clear bitmap range
+  void do_clear(MemRegion mr, bool large);
 
  public:
   static size_t compute_size(size_t heap_size);
@@ -106,9 +109,9 @@ class MarkBitMap : public MarkBitMapRO {
   inline bool parMark(HeapWord* addr);
 
   // Clear range. For larger regions, use *_large.
-  void clear();
-  void clear_range(MemRegion mr);
-  void clear_range_large(MemRegion mr);
+  void clear()                         { do_clear(_covered, true); }
+  void clear_range(MemRegion mr)       { do_clear(mr, false);      }
+  void clear_range_large(MemRegion mr) { do_clear(mr, true);       }
 };
 
 #endif // SHARE_VM_GC_SHARED_CMBITMAP_HPP

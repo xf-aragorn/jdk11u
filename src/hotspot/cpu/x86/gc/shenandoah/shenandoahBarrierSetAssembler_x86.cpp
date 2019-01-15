@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -22,7 +22,6 @@
  */
 
 #include "precompiled.hpp"
-#include "gc/shenandoah/brooksPointer.hpp"
 #include "gc/shenandoah/shenandoahBarrierSetAssembler.hpp"
 #include "gc/shenandoah/shenandoahHeap.hpp"
 #include "gc/shenandoah/shenandoahHeapRegion.hpp"
@@ -321,7 +320,7 @@ void ShenandoahBarrierSetAssembler::read_barrier_not_null(MacroAssembler* masm, 
 
 void ShenandoahBarrierSetAssembler::read_barrier_not_null_impl(MacroAssembler* masm, Register dst) {
   assert(UseShenandoahGC && (ShenandoahReadBarrier || ShenandoahStoreValReadBarrier || ShenandoahCASBarrier), "should be enabled");
-  __ movptr(dst, Address(dst, BrooksPointer::byte_offset()));
+  __ movptr(dst, Address(dst, ShenandoahBrooksPointer::byte_offset()));
 }
 
 
@@ -341,9 +340,7 @@ void ShenandoahBarrierSetAssembler::write_barrier_impl(MacroAssembler* masm, Reg
   __ jccb(Assembler::zero, done);
 
   // Heap is unstable, need to perform the read-barrier even if WB is inactive
-  if (ShenandoahWriteBarrierRB) {
-    read_barrier_not_null(masm, dst);
-  }
+  read_barrier_not_null(masm, dst);
 
   __ testb(gc_state, ShenandoahHeap::EVACUATION | ShenandoahHeap::TRAVERSAL);
   __ jccb(Assembler::zero, done);
@@ -543,9 +540,9 @@ void ShenandoahBarrierSetAssembler::tlab_allocate(MacroAssembler* masm,
 
   __ movptr(obj, Address(thread, JavaThread::tlab_top_offset()));
   if (var_size_in_bytes == noreg) {
-    __ lea(end, Address(obj, con_size_in_bytes + BrooksPointer::byte_size()));
+    __ lea(end, Address(obj, con_size_in_bytes + ShenandoahBrooksPointer::byte_size()));
   } else {
-    __ addptr(var_size_in_bytes, BrooksPointer::byte_size());
+    __ addptr(var_size_in_bytes, ShenandoahBrooksPointer::byte_size());
     __ lea(end, Address(obj, var_size_in_bytes, Address::times_1));
   }
   __ cmpptr(end, Address(thread, JavaThread::tlab_end_offset()));
@@ -556,11 +553,11 @@ void ShenandoahBarrierSetAssembler::tlab_allocate(MacroAssembler* masm,
 
   // Initialize brooks pointer
 #ifdef _LP64
-  __ incrementq(obj, BrooksPointer::byte_size());
+  __ incrementq(obj, ShenandoahBrooksPointer::byte_size());
 #else
-  __ incrementl(obj, BrooksPointer::byte_size());
+  __ incrementl(obj, ShenandoahBrooksPointer::byte_size());
 #endif
-  __ movptr(Address(obj, BrooksPointer::byte_offset()), obj);
+  __ movptr(Address(obj, ShenandoahBrooksPointer::byte_offset()), obj);
 
   // recover var_size_in_bytes if necessary
   if (var_size_in_bytes == end) {
@@ -711,6 +708,108 @@ void ShenandoahBarrierSetAssembler::xchg_oop(MacroAssembler* masm, DecoratorSet 
                                              Register obj, Address addr, Register tmp) {
   storeval_barrier(masm, obj, tmp);
   BarrierSetAssembler::xchg_oop(masm, decorators, obj, addr, tmp);
+}
+
+void ShenandoahBarrierSetAssembler::save_vector_registers(MacroAssembler* masm) {
+  int num_xmm_regs = LP64_ONLY(16) NOT_LP64(8);
+  if (UseAVX > 2) {
+    num_xmm_regs = LP64_ONLY(32) NOT_LP64(8);
+  }
+
+  if (UseSSE == 1)  {
+    __ subptr(rsp, sizeof(jdouble)*8);
+    for (int n = 0; n < 8; n++) {
+      __ movflt(Address(rsp, n*sizeof(jdouble)), as_XMMRegister(n));
+    }
+  } else if (UseSSE >= 2)  {
+    if (UseAVX > 2) {
+      __ push(rbx);
+      __ movl(rbx, 0xffff);
+      __ kmovwl(k1, rbx);
+      __ pop(rbx);
+    }
+#ifdef COMPILER2
+    if (MaxVectorSize > 16) {
+      if(UseAVX > 2) {
+        // Save upper half of ZMM registers
+        __ subptr(rsp, 32*num_xmm_regs);
+        for (int n = 0; n < num_xmm_regs; n++) {
+          __ vextractf64x4_high(Address(rsp, n*32), as_XMMRegister(n));
+        }
+      }
+      assert(UseAVX > 0, "256 bit vectors are supported only with AVX");
+      // Save upper half of YMM registers
+      __ subptr(rsp, 16*num_xmm_regs);
+      for (int n = 0; n < num_xmm_regs; n++) {
+        __ vextractf128_high(Address(rsp, n*16), as_XMMRegister(n));
+      }
+    }
+#endif
+    // Save whole 128bit (16 bytes) XMM registers
+    __ subptr(rsp, 16*num_xmm_regs);
+#ifdef _LP64
+    if (VM_Version::supports_evex()) {
+      for (int n = 0; n < num_xmm_regs; n++) {
+        __ vextractf32x4(Address(rsp, n*16), as_XMMRegister(n), 0);
+      }
+    } else {
+      for (int n = 0; n < num_xmm_regs; n++) {
+        __ movdqu(Address(rsp, n*16), as_XMMRegister(n));
+      }
+    }
+#else
+    for (int n = 0; n < num_xmm_regs; n++) {
+      __ movdqu(Address(rsp, n*16), as_XMMRegister(n));
+    }
+#endif
+  }
+}
+
+void ShenandoahBarrierSetAssembler::restore_vector_registers(MacroAssembler* masm) {
+  int num_xmm_regs = LP64_ONLY(16) NOT_LP64(8);
+  if (UseAVX > 2) {
+    num_xmm_regs = LP64_ONLY(32) NOT_LP64(8);
+  }
+  if (UseSSE == 1)  {
+    for (int n = 0; n < 8; n++) {
+      __ movflt(as_XMMRegister(n), Address(rsp, n*sizeof(jdouble)));
+    }
+    __ addptr(rsp, sizeof(jdouble)*8);
+  } else if (UseSSE >= 2)  {
+    // Restore whole 128bit (16 bytes) XMM registers
+#ifdef _LP64
+    if (VM_Version::supports_evex()) {
+      for (int n = 0; n < num_xmm_regs; n++) {
+        __ vinsertf32x4(as_XMMRegister(n), as_XMMRegister(n), Address(rsp, n*16), 0);
+      }
+    } else {
+      for (int n = 0; n < num_xmm_regs; n++) {
+        __ movdqu(as_XMMRegister(n), Address(rsp, n*16));
+      }
+    }
+#else
+    for (int n = 0; n < num_xmm_regs; n++) {
+      __ movdqu(as_XMMRegister(n), Address(rsp, n*16));
+    }
+#endif
+    __ addptr(rsp, 16*num_xmm_regs);
+
+#ifdef COMPILER2
+    if (MaxVectorSize > 16) {
+      // Restore upper half of YMM registers.
+      for (int n = 0; n < num_xmm_regs; n++) {
+        __ vinsertf128_high(as_XMMRegister(n), Address(rsp, n*16));
+      }
+      __ addptr(rsp, 16*num_xmm_regs);
+      if (UseAVX > 2) {
+        for (int n = 0; n < num_xmm_regs; n++) {
+          __ vinsertf64x4_high(as_XMMRegister(n), Address(rsp, n*32));
+        }
+        __ addptr(rsp, 32*num_xmm_regs);
+      }
+    }
+#endif
+  }
 }
 
 #ifdef COMPILER1
@@ -906,10 +1005,10 @@ address ShenandoahBarrierSetAssembler::generate_shenandoah_wb(StubCodeGenerator*
     __ push(r14);
     __ push(r15);
   }
-  __ save_vector_registers();
+  save_vector_registers(cgen->assembler());
   __ movptr(rdi, rax);
   __ call_VM_leaf(CAST_FROM_FN_PTR(address, ShenandoahRuntime::write_barrier_JRT), rdi);
-  __ restore_vector_registers();
+  restore_vector_registers(cgen->assembler());
   if (!c_abi) {
     __ pop(r15);
     __ pop(r14);
@@ -944,6 +1043,6 @@ void ShenandoahBarrierSetAssembler::barrier_stubs_init() {
     CodeBuffer buf(bb);
     StubCodeGenerator cgen(&buf);
     _shenandoah_wb = generate_shenandoah_wb(&cgen, false, true);
-    _shenandoah_wb_C = generate_shenandoah_wb(&cgen, true, !ShenandoahWriteBarrierCsetTestInIR);
+    _shenandoah_wb_C = generate_shenandoah_wb(&cgen, true, false);
   }
 }

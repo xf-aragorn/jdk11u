@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -51,17 +51,17 @@ public:
   template <class T, bool STRING_DEDUP, bool DEGEN>
   inline void process_oop(T* p, Thread* thread, ShenandoahObjToScanQueue* queue, ShenandoahMarkingContext* const mark_context);
 
-  bool check_and_handle_cancelled_gc(ShenandoahTaskTerminator* terminator);
+  bool check_and_handle_cancelled_gc(ShenandoahTaskTerminator* terminator, bool sts_yield);
 
   ShenandoahObjToScanQueueSet* task_queues();
 
-  void main_loop(uint worker_id, ShenandoahTaskTerminator* terminator);
+  void main_loop(uint worker_id, ShenandoahTaskTerminator* terminator, bool sts_yield);
 
 private:
   void prepare_regions();
 
   template <class T>
-  void main_loop_work(T* cl, jushort* live_data, uint worker_id, ShenandoahTaskTerminator* terminator);
+  void main_loop_work(T* cl, jushort* live_data, uint worker_id, ShenandoahTaskTerminator* terminator, bool sts_yield);
 
   void preclean_weak_refs();
   void weak_refs_work();

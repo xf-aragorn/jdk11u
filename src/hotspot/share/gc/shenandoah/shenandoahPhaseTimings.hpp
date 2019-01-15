@@ -1,6 +1,6 @@
 
 /*
- * Copyright (c) 2017, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2017, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -25,9 +25,9 @@
 #ifndef SHARE_VM_GC_SHENANDOAH_SHENANDOAHPHASETIMEINGS_HPP
 #define SHARE_VM_GC_SHENANDOAH_SHENANDOAHPHASETIMEINGS_HPP
 
+#include "gc/shenandoah/shenandoahNumberSeq.hpp"
 #include "gc/shared/workerDataArray.hpp"
 #include "memory/allocation.hpp"
-#include "utilities/numberSeq.hpp"
 
 class ShenandoahCollectorPolicy;
 class ShenandoahWorkerTimings;
@@ -331,8 +331,8 @@ private:
   };
 
 private:
-  TimingData _timing_data[_num_phases];
-  const char* _phase_names[_num_phases];
+  TimingData          _timing_data[_num_phases];
+  static const char*  _phase_names[_num_phases];
 
   ShenandoahWorkerTimings*      _worker_times;
   ShenandoahTerminationTimings* _termination_times;
@@ -349,11 +349,16 @@ public:
   void record_phase_start(Phase phase);
   // record phase end and return elapsed time in seconds for the phase
   void record_phase_end(Phase phase);
-  // record an elapsed time in microseconds for the phase
-  void record_phase_time(Phase phase, jint time_us);
+  // record an elapsed time for the phase
+  void record_phase_time(Phase phase, double time);
 
   void record_workers_start(Phase phase);
   void record_workers_end(Phase phase);
+
+  static const char* phase_name(Phase phase) {
+    assert(phase >= 0 && phase < _num_phases, "Out of bound");
+    return _phase_names[phase];
+  }
 
   void print_on(outputStream* out) const;
 
@@ -378,16 +383,6 @@ public:
   void print() const;
 };
 
-class ShenandoahWorkerTimingsTracker : public StackObj {
-  double _start_time;
-  ShenandoahPhaseTimings::GCParPhases _phase;
-  ShenandoahWorkerTimings* _worker_times;
-  uint _worker_id;
-public:
-  ShenandoahWorkerTimingsTracker(ShenandoahWorkerTimings* worker_times, ShenandoahPhaseTimings::GCParPhases phase, uint worker_id);
-  ~ShenandoahWorkerTimingsTracker();
-};
-
 class ShenandoahTerminationTimings : public CHeapObj<mtGC> {
 private:
   WorkerDataArray<double>* _gc_termination_phase;
@@ -397,31 +392,10 @@ public:
   // record the time a phase took in seconds
   void record_time_secs(uint worker_i, double secs);
 
-  double average() const { return _gc_termination_phase->average(); }
-  void reset() { _gc_termination_phase->reset(); }
+  double average() const;
+  void reset();
 
   void print() const;
-};
-
-class ShenandoahTerminationTimingsTracker : public StackObj {
-private:
-  double _start_time;
-  uint   _worker_id;
-
-public:
-  ShenandoahTerminationTimingsTracker(uint worker_id);
-  ~ShenandoahTerminationTimingsTracker();
-};
-
-// Tracking termination time in specific GC phase
-class ShenandoahTerminationTracker : public StackObj {
-private:
-  ShenandoahPhaseTimings::Phase _phase;
-
-  static ShenandoahPhaseTimings::Phase currentPhase;
-public:
-  ShenandoahTerminationTracker(ShenandoahPhaseTimings::Phase phase);
-  ~ShenandoahTerminationTracker();
 };
 
 #endif // SHARE_VM_GC_SHENANDOAH_SHENANDOAHGCPHASETIMEINGS_HPP

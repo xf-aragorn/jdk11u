@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Red Hat, Inc. All rights reserved.
+ * Copyright (c) 2016, 2018, Red Hat, Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,8 +22,10 @@
  */
 
 /**
- * @test
+ * @test TestNullCheck
  * @summary implicit null check on brooks pointer must not cause crash
+ * @key gc
+ * @requires vm.gc.Shenandoah
  * @run main/othervm -XX:-BackgroundCompilation -XX:-UseOnStackReplacement -XX:-TieredCompilation
  *                   -XX:+UnlockExperimentalVMOptions -XX:+UseShenandoahGC
  *                   -Xmx4G -XX:HeapBaseMinAddress=0x800000000 TestNullCheck
@@ -53,10 +55,10 @@ public class TestNullCheck {
         }
         try {
             test1(null);
-        } catch(NullPointerException npe) {}
+        } catch (NullPointerException npe) {}
         static_obj = null;
         try {
             test2();
-        } catch(NullPointerException npe) {}
+        } catch (NullPointerException npe) {}
     }
 }

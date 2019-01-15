@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2017, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -24,13 +24,15 @@
 #ifndef SHARE_VM_GC_SHENANDOAHUTILS_HPP
 #define SHARE_VM_GC_SHENANDOAHUTILS_HPP
 
+#include "jfr/jfrEvents.hpp"
+
 #include "gc/shared/gcCause.hpp"
 #include "gc/shared/isGCActiveMark.hpp"
+#include "gc/shared/suspendibleThreadSet.hpp"
 #include "gc/shared/vmGCOperations.hpp"
 #include "gc/shenandoah/shenandoahPhaseTimings.hpp"
 #include "gc/shenandoah/shenandoahThreadLocalData.hpp"
 #include "memory/allocation.hpp"
-#include "memory/iterator.hpp"
 #include "runtime/safepoint.hpp"
 #include "runtime/vmThread.hpp"
 #include "runtime/vm_operations.hpp"
@@ -53,11 +55,21 @@ public:
 
 class ShenandoahGCPhase : public StackObj {
 private:
+  static const ShenandoahPhaseTimings::Phase _invalid_phase = ShenandoahPhaseTimings::_num_phases;
+  static ShenandoahPhaseTimings::Phase       _current_phase;
+
   ShenandoahHeap* const _heap;
   const ShenandoahPhaseTimings::Phase   _phase;
+  ShenandoahPhaseTimings::Phase         _parent_phase;
 public:
   ShenandoahGCPhase(ShenandoahPhaseTimings::Phase phase);
   ~ShenandoahGCPhase();
+
+  static ShenandoahPhaseTimings::Phase current_phase() { return _current_phase; }
+
+  static bool is_valid_phase(ShenandoahPhaseTimings::Phase phase);
+  static bool is_current_phase_valid() { return is_valid_phase(current_phase()); }
+  static bool is_root_work_phase();
 };
 
 // Aggregates all the things that should happen before/after the pause.
@@ -107,10 +119,12 @@ public:
 };
 
 class ShenandoahWorkerSession : public StackObj {
-public:
+protected:
+  uint _worker_id;
+
   ShenandoahWorkerSession(uint worker_id);
   ~ShenandoahWorkerSession();
-
+public:
   static inline uint worker_id() {
     Thread* thr = Thread::current();
     uint id = ShenandoahThreadLocalData::worker_id(thr);
@@ -119,25 +133,39 @@ public:
   }
 };
 
-class ShouldNotReachHereVoidClosure : public VoidClosure {
-  virtual void do_void() {
-    ShouldNotReachHere();
+class ShenandoahConcurrentWorkerSession : public ShenandoahWorkerSession {
+public:
+  ShenandoahConcurrentWorkerSession(uint worker_id) : ShenandoahWorkerSession(worker_id) { }
+  ~ShenandoahConcurrentWorkerSession();
+};
+
+class ShenandoahParallelWorkerSession : public ShenandoahWorkerSession {
+public:
+  ShenandoahParallelWorkerSession(uint worker_id) : ShenandoahWorkerSession(worker_id) { }
+  ~ShenandoahParallelWorkerSession();
+};
+
+class ShenandoahSuspendibleThreadSetJoiner {
+private:
+  SuspendibleThreadSetJoiner _joiner;
+public:
+  ShenandoahSuspendibleThreadSetJoiner(bool active = true) : _joiner(active) {
+    assert(!ShenandoahThreadLocalData::is_evac_allowed(Thread::current()), "STS should be joined before evac scope");
+  }
+  ~ShenandoahSuspendibleThreadSetJoiner() {
+    assert(!ShenandoahThreadLocalData::is_evac_allowed(Thread::current()), "STS should be left after evac scope");
   }
 };
 
-class ShouldNotReachHereBoolObjectClosure : public BoolObjectClosure {
-  virtual bool do_object_b(oop obj) {
-    ShouldNotReachHere();
-    return false;
+class ShenandoahSuspendibleThreadSetLeaver {
+private:
+  SuspendibleThreadSetLeaver _leaver;
+public:
+  ShenandoahSuspendibleThreadSetLeaver(bool active = true) : _leaver(active) {
+    assert(!ShenandoahThreadLocalData::is_evac_allowed(Thread::current()), "STS should be left after evac scope");
   }
-};
-
-class ShouldNotReachHereOopClosure : public OopClosure {
-  virtual void do_oop(oop* o) {
-    ShouldNotReachHere();
-  }
-  virtual void do_oop(narrowOop* o) {
-    ShouldNotReachHere();
+  ~ShenandoahSuspendibleThreadSetLeaver() {
+    assert(!ShenandoahThreadLocalData::is_evac_allowed(Thread::current()), "STS should be joined before evac scope");
   }
 };
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2016, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -26,7 +26,10 @@
  */
 
 /*
- * @test Shenandoah reference CAS test
+ * @test TestReferenceCAS
+ * @summary Shenandoah reference CAS test
+ * @key gc
+ * @requires vm.gc.Shenandoah
  * @modules java.base/jdk.internal.misc:+open
  *
  * @run main/othervm -Diters=20000 -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions -XX:ShenandoahGCHeuristics=aggressive -XX:+UseShenandoahGC                                                 TestReferenceCAS

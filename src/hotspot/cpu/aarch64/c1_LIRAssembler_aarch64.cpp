@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2000, 2018, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2014, Red Hat Inc. All rights reserved.
+ * Copyright (c) 2014, 2018, Red Hat, Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -1569,6 +1569,8 @@ void LIR_Assembler::emit_compare_and_swap(LIR_OpCompareAndSwap* op) {
   }
   Register newval = as_reg(op->new_value());
   Register cmpval = as_reg(op->cmp_value());
+  Label succeed, fail, around;
+
   if (op->code() == lir_cas_obj) {
     assert(op->tmp1()->is_valid(), "must be");
     assert(op->tmp1()->is_register(), "tmp1 must be register");
@@ -2785,7 +2787,10 @@ void LIR_Assembler::align_backward_branch_target() {
 }
 
 
-void LIR_Assembler::negate(LIR_Opr left, LIR_Opr dest) {
+void LIR_Assembler::negate(LIR_Opr left, LIR_Opr dest, LIR_Opr tmp) {
+  // tmp must be unused
+  assert(tmp->is_illegal(), "wasting a register if tmp is allocated");
+
   if (left->is_single_cpu()) {
     assert(dest->is_single_cpu(), "expect single result reg");
     __ negw(dest->as_register(), left->as_register());

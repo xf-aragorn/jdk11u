@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2017, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -25,8 +25,8 @@
 #define SHARE_VM_GC_SHENANDOAH_SHENANDOAHALLOCTRACKER_HPP
 
 #include "gc/shenandoah/shenandoahAllocRequest.hpp"
+#include "gc/shenandoah/shenandoahNumberSeq.hpp"
 #include "memory/allocation.hpp"
-#include "utilities/numberSeq.hpp"
 #include "utilities/ostream.hpp"
 
 class ShenandoahAllocTracker : public CHeapObj<mtGC> {

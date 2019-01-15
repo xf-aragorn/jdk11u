@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2018, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2013, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -59,8 +59,11 @@ class VMStructs;
 
 class ShenandoahRegionIterator : public StackObj {
 private:
-  volatile size_t _index;
   ShenandoahHeap* _heap;
+
+  DEFINE_PAD_MINUS_SIZE(0, DEFAULT_CACHE_LINE_SIZE, sizeof(volatile size_t));
+  volatile size_t _index;
+  DEFINE_PAD_MINUS_SIZE(1, DEFAULT_CACHE_LINE_SIZE, 0);
 
   // No implicit copying: iterators should be passed by reference to capture the state
   ShenandoahRegionIterator(const ShenandoahRegionIterator& that);
@@ -84,8 +87,8 @@ public:
 
 class ShenandoahHeapRegionClosure : public StackObj {
 public:
-  // typically called on each region until it returns true;
-  virtual bool heap_region_do(ShenandoahHeapRegion* r) = 0;
+  virtual void heap_region_do(ShenandoahHeapRegion* r) = 0;
+  virtual bool is_thread_safe() { return false; }
 };
 
 class ShenandoahUpdateRefsClosure: public OopClosure {
@@ -195,9 +198,11 @@ public:
 //
 private:
            size_t _initial_size;
+  DEFINE_PAD_MINUS_SIZE(0, DEFAULT_CACHE_LINE_SIZE, sizeof(volatile size_t));
   volatile size_t _used;
   volatile size_t _committed;
   volatile size_t _bytes_allocated_since_gc_start;
+  DEFINE_PAD_MINUS_SIZE(1, DEFAULT_CACHE_LINE_SIZE, 0);
 
 public:
   void increase_used(size_t bytes);
@@ -249,9 +254,8 @@ public:
 
   inline ShenandoahHeapRegion* const get_region(size_t region_idx) const;
 
-  void heap_region_iterate(ShenandoahHeapRegionClosure* blk,
-                           bool skip_cset_regions = false,
-                           bool skip_humongous_continuation = false) const;
+  void heap_region_iterate(ShenandoahHeapRegionClosure* blk) const;
+  void parallel_heap_region_iterate(ShenandoahHeapRegionClosure* blk) const;
 
 // ---------- GC state machinery
 //
@@ -444,7 +448,8 @@ private:
   void op_mark();
   void op_preclean();
   void op_cleanup();
-  void op_evac();
+  void op_conc_evac();
+  void op_stw_evac();
   void op_updaterefs();
   void op_traversal();
   void op_uncommit(double shrink_before);
@@ -599,6 +604,9 @@ private:
 public:
   HeapWord* allocate_memory(ShenandoahAllocRequest& request);
   HeapWord* mem_allocate(size_t size, bool* what);
+  MetaWord* satisfy_failed_metadata_allocation(ClassLoaderData* loader_data,
+                                               size_t size,
+                                               Metaspace::MetadataType mdtype);
 
   oop obj_allocate(Klass* klass, int size, TRAPS);
   oop array_allocate(Klass* klass, int size, int length, bool do_zero, TRAPS);
@@ -673,8 +681,6 @@ public:
   // Support for bitmap uncommits
   bool commit_bitmap_slice(ShenandoahHeapRegion *r);
   bool uncommit_bitmap_slice(ShenandoahHeapRegion *r);
-  bool idle_bitmap_slice(ShenandoahHeapRegion* r);
-  void activate_bitmap_slice(ShenandoahHeapRegion* r);
   bool is_bitmap_slice_committed(ShenandoahHeapRegion* r, bool skip_self = false);
 
   // Liveness caching support

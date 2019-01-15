@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2018, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2017, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -33,6 +33,7 @@
 #include "gc/shenandoah/shenandoahMarkingContext.inline.hpp"
 #include "gc/shenandoah/shenandoahStringDedup.hpp"
 #include "gc/shenandoah/shenandoahStrDedupQueue.hpp"
+#include "gc/shenandoah/shenandoahTimingTracker.hpp"
 #include "gc/shenandoah/shenandoahUtils.hpp"
 #include "runtime/thread.hpp"
 

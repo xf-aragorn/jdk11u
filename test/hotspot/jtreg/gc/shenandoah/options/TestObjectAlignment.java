@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2017, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -23,6 +23,9 @@
 
 /*
  * @test TestObjectAlignment
+ * @key gc
+ * @requires vm.gc.Shenandoah
+ *
  * @run main/othervm -XX:+UnlockExperimentalVMOptions -XX:+UseShenandoahGC -XX:ObjectAlignmentInBytes=16          TestObjectAlignment
  * @run main/othervm -XX:+UnlockExperimentalVMOptions -XX:+UseShenandoahGC -XX:ObjectAlignmentInBytes=16 -Xmx16m  TestObjectAlignment
  * @run main/othervm -XX:+UnlockExperimentalVMOptions -XX:+UseShenandoahGC -XX:ObjectAlignmentInBytes=16 -Xmx32m  TestObjectAlignment
@@ -35,8 +38,8 @@
 
 public class TestObjectAlignment {
 
-  public static void main(String[] args) throws Exception {
-    // Testing the checking code on startup
-  }
+    public static void main(String[] args) throws Exception {
+        // Testing the checking code on startup
+    }
 
 }

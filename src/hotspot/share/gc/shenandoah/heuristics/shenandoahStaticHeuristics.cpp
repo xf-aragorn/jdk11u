@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -34,7 +34,20 @@ ShenandoahStaticHeuristics::ShenandoahStaticHeuristics() : ShenandoahHeuristics(
   // Static heuristics may degrade to continuous if live data is larger
   // than free threshold. ShenandoahAllocationThreshold is supposed to break this,
   // but it only works if it is non-zero.
-  SHENANDOAH_ERGO_OVERRIDE_DEFAULT(ShenandoahImmediateThreshold, 1);
+  SHENANDOAH_ERGO_OVERRIDE_DEFAULT(ShenandoahAllocationThreshold, 1);
+
+  SHENANDOAH_ERGO_ENABLE_FLAG(ExplicitGCInvokesConcurrent);
+  SHENANDOAH_ERGO_ENABLE_FLAG(ShenandoahImplicitGCInvokesConcurrent);
+
+  // Final configuration checks
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahSATBBarrier);
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahReadBarrier);
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahWriteBarrier);
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahStoreValReadBarrier);
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahKeepAliveBarrier);
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahCASBarrier);
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahAcmpBarrier);
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahCloneBarrier);
 }
 
 ShenandoahStaticHeuristics::~ShenandoahStaticHeuristics() {}

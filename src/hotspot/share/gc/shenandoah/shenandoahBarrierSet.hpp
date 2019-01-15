@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2013, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -120,18 +120,18 @@ private:
 
   template <typename T>
   bool arraycopy_loop_1(T* src, T* dst, size_t length, Klass* bound,
-                        bool checkcast, bool satb, ShenandoahBarrierSet::ArrayCopyStoreValMode storeval_mode);
+                        bool checkcast, bool satb, bool disjoint, ShenandoahBarrierSet::ArrayCopyStoreValMode storeval_mode);
 
   template <typename T, bool CHECKCAST>
   bool arraycopy_loop_2(T* src, T* dst, size_t length, Klass* bound,
-                        bool satb, ShenandoahBarrierSet::ArrayCopyStoreValMode storeval_mode);
+                        bool satb, bool disjoint, ShenandoahBarrierSet::ArrayCopyStoreValMode storeval_mode);
 
   template <typename T, bool CHECKCAST, bool SATB>
   bool arraycopy_loop_3(T* src, T* dst, size_t length, Klass* bound,
-                        ShenandoahBarrierSet::ArrayCopyStoreValMode storeval_mode);
+                        bool disjoint, ShenandoahBarrierSet::ArrayCopyStoreValMode storeval_mode);
 
   template <typename T, bool CHECKCAST, bool SATB, ShenandoahBarrierSet::ArrayCopyStoreValMode STOREVAL_MODE>
-  bool arraycopy_loop(T* src, T* dst, size_t length, Klass* bound);
+  bool arraycopy_loop(T* src, T* dst, size_t length, Klass* bound, bool disjoint);
 
   template <typename T, bool CHECKCAST, bool SATB, ShenandoahBarrierSet::ArrayCopyStoreValMode STOREVAL_MODE>
   bool arraycopy_element(T* cur_src, T* cur_dst, Klass* bound, Thread* thread);
@@ -278,12 +278,12 @@ public:
 
 template<>
 struct BarrierSet::GetName<ShenandoahBarrierSet> {
-  static const BarrierSet::Name value = BarrierSet::Shenandoah;
+  static const BarrierSet::Name value = BarrierSet::ShenandoahBarrierSet;
 };
 
 template<>
-struct BarrierSet::GetType<BarrierSet::Shenandoah> {
-  typedef ShenandoahBarrierSet type;
+struct BarrierSet::GetType<BarrierSet::ShenandoahBarrierSet> {
+  typedef ::ShenandoahBarrierSet type;
 };
 
 #endif //SHARE_VM_GC_SHENANDOAH_SHENANDOAHBARRIERSET_HPP

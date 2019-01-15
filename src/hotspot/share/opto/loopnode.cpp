@@ -42,7 +42,7 @@
 #include "opto/superword.hpp"
 #include "utilities/macros.hpp"
 #if INCLUDE_SHENANDOAHGC
-#include "gc/shenandoah/c2/shenandoahSupport.hpp"
+#include "gc/shenandoah/c2/shenandoahBarrierSetC2.hpp"
 #endif
 
 //=============================================================================
@@ -3973,7 +3973,7 @@ Node *PhaseIdealLoop::get_late_ctrl( Node *n, Node *early ) {
         }
       } else {
         Node *sctrl = has_ctrl(s) ? get_ctrl(s) : s->in(0);
-        assert(sctrl != NULL || s->outcnt() == 0 || s->is_ShenandoahBarrier(), "must have control");
+        assert(sctrl != NULL || s->outcnt() == 0, "must have control");
         if (sctrl != NULL && !sctrl->is_top() && is_dominator(early, sctrl)) {
           LCA = dom_lca_for_get_late_ctrl(LCA, sctrl, n);
         }
@@ -4143,7 +4143,7 @@ void PhaseIdealLoop::build_loop_late(VectorSet &visited, Node_List &worklist, No
   }
 }
 
-// Verify that no data node is scheduled in the outer loop of a strip
+// Verify that no data node is schedules in the outer loop of a strip
 // mined loop.
 void PhaseIdealLoop::verify_strip_mined_scheduling(Node *n, Node* least) {
 #ifdef ASSERT
@@ -4237,7 +4237,6 @@ void PhaseIdealLoop::build_loop_late_post(Node *n, bool verify_strip_mined) {
     case Op_HasNegatives:
       pinned = false;
     }
-
     if( pinned ) {
       IdealLoopTree *chosen_loop = get_loop(n->is_CFG() ? n : get_ctrl(n));
       if( !chosen_loop->_child )       // Inner loop?

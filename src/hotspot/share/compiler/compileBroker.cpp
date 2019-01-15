@@ -1781,36 +1781,38 @@ void CompileBroker::compiler_thread_loop() {
           return; // Stop this thread.
         }
       }
-      continue;
-    }
+    } else {
 
-    if (UseDynamicNumberOfCompilerThreads) {
-      possibly_add_compiler_threads();
-    }
+      // Give compiler threads an extra quanta.  They tend to be bursty and
+      // this helps the compiler to finish up the job.
+      if (CompilerThreadHintNoPreempt) {
+        os::hint_no_preempt();
+      }
 
-    // Give compiler threads an extra quanta.  They tend to be bursty and
-    // this helps the compiler to finish up the job.
-    if (CompilerThreadHintNoPreempt) {
-      os::hint_no_preempt();
-    }
+      // Assign the task to the current thread.  Mark this compilation
+      // thread as active for the profiler.
+      // CompileTaskWrapper also keeps the Method* from being deallocated if redefinition
+      // occurs after fetching the compile task off the queue.
+      CompileTaskWrapper ctw(task);
+      nmethodLocker result_handle;  // (handle for the nmethod produced by this task)
+      task->set_code_handle(&result_handle);
+      methodHandle method(thread, task->method());
 
-    // Assign the task to the current thread.  Mark this compilation
-    // thread as active for the profiler.
-    CompileTaskWrapper ctw(task);
-    nmethodLocker result_handle;  // (handle for the nmethod produced by this task)
-    task->set_code_handle(&result_handle);
-    methodHandle method(thread, task->method());
+      // Never compile a method if breakpoints are present in it
+      if (method()->number_of_breakpoints() == 0) {
+        // Compile the method.
+        if ((UseCompiler || AlwaysCompileLoopMethods) && CompileBroker::should_compile_new_jobs()) {
+          invoke_compiler_on_method(task);
+          thread->start_idle_timer();
+        } else {
+          // After compilation is disabled, remove remaining methods from queue
+          method->clear_queued_for_compilation();
+          task->set_failure_reason("compilation is disabled");
+        }
+      }
 
-    // Never compile a method if breakpoints are present in it
-    if (method()->number_of_breakpoints() == 0) {
-      // Compile the method.
-      if ((UseCompiler || AlwaysCompileLoopMethods) && CompileBroker::should_compile_new_jobs()) {
-        invoke_compiler_on_method(task);
-        thread->start_idle_timer();
-      } else {
-        // After compilation is disabled, remove remaining methods from queue
-        method->clear_queued_for_compilation();
-        task->set_failure_reason("compilation is disabled");
+      if (UseDynamicNumberOfCompilerThreads) {
+        possibly_add_compiler_threads();
       }
     }
   }
@@ -2093,10 +2095,6 @@ void CompileBroker::invoke_compiler_on_method(CompileTask* task) {
 
     ciMethod* target = ci_env.get_method_from_handle(target_handle);
 
-#if INCLUDE_SHENANDOAHGC
-    bool target_compilable = target->can_be_parsed() && target->can_be_compiled();
-#endif
-
     TraceTime t1("compilation", &time);
     EventCompilation event;
 
@@ -2127,13 +2125,6 @@ void CompileBroker::invoke_compiler_on_method(CompileTask* task) {
       retry_message = ci_env.retry_message();
       ci_env.report_failure(failure_reason);
     }
-
-#if INCLUDE_SHENANDOAHGC
-    guarantee(!UseShenandoahGC || !ShenandoahCompileCheck || !target_compilable || (compilable != ciEnv::MethodCompilable_not_at_tier),
-              "Not compilable on level %d due to: %s", task_level, failure_reason);
-    guarantee(!UseShenandoahGC || !ShenandoahCompileCheck || !target_compilable ||(compilable != ciEnv::MethodCompilable_never || !target_compilable),
-              "Never compilable due to: %s", failure_reason);
-#endif
 
     post_compile(thread, task, !ci_env.failing(), &ci_env);
     if (event.should_commit()) {

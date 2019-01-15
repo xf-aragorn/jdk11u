@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -66,6 +66,9 @@ private:
   void storeval_barrier_impl(MacroAssembler* masm, Register dst, Register tmp);
 
   address generate_shenandoah_wb(StubCodeGenerator* cgen, bool c_abi, bool do_cset_test);
+
+  void save_vector_registers(MacroAssembler* masm);
+  void restore_vector_registers(MacroAssembler* masm);
 
 public:
   static address shenandoah_wb();

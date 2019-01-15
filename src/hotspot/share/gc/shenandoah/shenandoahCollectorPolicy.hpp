@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2017, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2013, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -25,8 +25,8 @@
 #define SHARE_VM_GC_SHENANDOAH_SHENANDOAHCOLLECTORPOLICY_HPP
 
 #include "gc/shared/collectorPolicy.hpp"
-#include "gc/shared/gcTrace.hpp"
 #include "gc/shenandoah/shenandoahHeap.hpp"
+#include "gc/shenandoah/shenandoahTracer.hpp"
 #include "utilities/ostream.hpp"
 
 class ShenandoahCollectorPolicy: public CollectorPolicy {
@@ -39,6 +39,8 @@ private:
   size_t _alloc_failure_full;
   size_t _explicit_concurrent;
   size_t _explicit_full;
+  size_t _implicit_concurrent;
+  size_t _implicit_full;
   size_t _degen_points[ShenandoahHeap::_DEGENERATED_LIMIT];
 
   ShenandoahSharedFlag _in_shutdown;
@@ -64,6 +66,8 @@ public:
   void record_degenerated_upgrade_to_full();
   void record_explicit_to_concurrent();
   void record_explicit_to_full();
+  void record_implicit_to_concurrent();
+  void record_implicit_to_full();
 
   void record_shutdown();
   bool is_at_shutdown();

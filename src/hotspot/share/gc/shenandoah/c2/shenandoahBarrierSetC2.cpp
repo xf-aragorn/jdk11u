@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -76,10 +76,6 @@ Node* ShenandoahBarrierSetC2::shenandoah_storeval_barrier(GraphKit* kit, Node* o
     obj = shenandoah_read_barrier_impl(kit, obj, true, false, false);
   }
   return obj;
-}
-
-Node* ShenandoahBarrierSetC2::shenandoah_read_barrier_acmp(GraphKit* kit, Node* obj) {
-  return shenandoah_read_barrier_impl(kit, obj, true, true, false);
 }
 
 Node* ShenandoahBarrierSetC2::shenandoah_read_barrier_impl(GraphKit* kit, Node* obj, bool use_ctrl, bool use_mem, bool allow_fromspace) const {
@@ -698,7 +694,7 @@ Node* ShenandoahBarrierSetC2::resolve_for_write(GraphKit* kit, Node* n) const {
 
 // Support for GC barriers emitted during parsing
 bool ShenandoahBarrierSetC2::is_gc_barrier_node(Node* node) const {
-  if (node->Opcode() != Op_CallLeaf) {
+  if (node->Opcode() != Op_CallLeaf && node->Opcode() != Op_CallLeafNoFP) {
     return false;
   }
   CallLeafNode *call = node->as_CallLeaf();

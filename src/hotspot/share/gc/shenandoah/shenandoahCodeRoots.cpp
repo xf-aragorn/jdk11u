@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2018, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2017, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -27,6 +27,7 @@
 #include "gc/shenandoah/shenandoahHeap.hpp"
 #include "gc/shenandoah/shenandoahHeap.inline.hpp"
 #include "gc/shenandoah/shenandoahCodeRoots.hpp"
+#include "memory/resourceArea.hpp"
 
 ShenandoahParallelCodeCacheIterator::ShenandoahParallelCodeCacheIterator(const GrowableArray<CodeHeap*>* heaps) {
   _length = heaps->length();
@@ -97,6 +98,7 @@ void ShenandoahParallelCodeHeapIterator::parallel_blobs_do(CodeBlobClosure* f) {
 
 class ShenandoahNMethodOopDetector : public OopClosure {
 private:
+  ResourceMark rm; // For growable array allocation below.
   GrowableArray<oop*> _oops;
 
 public:
@@ -151,11 +153,11 @@ public:
   }
 };
 
-volatile int ShenandoahCodeRoots::_recorded_nms_lock;
+ShenandoahCodeRoots::PaddedLock ShenandoahCodeRoots::_recorded_nms_lock;
 GrowableArray<ShenandoahNMethod*>* ShenandoahCodeRoots::_recorded_nms;
 
 void ShenandoahCodeRoots::initialize() {
-  _recorded_nms_lock = 0;
+  _recorded_nms_lock._lock = 0;
   _recorded_nms = new (ResourceObj::C_HEAP, mtGC) GrowableArray<ShenandoahNMethod*>(100, true, mtGC);
 }
 

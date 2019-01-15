@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -22,7 +22,6 @@
  */
 
 #include "precompiled.hpp"
-#include "gc/shenandoah/brooksPointer.hpp"
 #include "gc/shenandoah/shenandoahBarrierSetAssembler.hpp"
 #include "gc/shenandoah/shenandoahHeap.hpp"
 #include "gc/shenandoah/shenandoahHeapRegion.hpp"
@@ -214,7 +213,7 @@ void ShenandoahBarrierSetAssembler::read_barrier_not_null(MacroAssembler* masm, 
 
 void ShenandoahBarrierSetAssembler::read_barrier_not_null_impl(MacroAssembler* masm, Register dst) {
   assert(UseShenandoahGC && (ShenandoahReadBarrier || ShenandoahStoreValReadBarrier || ShenandoahCASBarrier), "should be enabled");
-  __ ldr(dst, Address(dst, BrooksPointer::byte_offset()));
+  __ ldr(dst, Address(dst, ShenandoahBrooksPointer::byte_offset()));
 }
 
 void ShenandoahBarrierSetAssembler::write_barrier(MacroAssembler* masm, Register dst) {
@@ -239,9 +238,7 @@ void ShenandoahBarrierSetAssembler::write_barrier_impl(MacroAssembler* masm, Reg
   __ br(Assembler::EQ, done);
 
   // Heap is unstable, need to perform the read-barrier even if WB is inactive
-  if (ShenandoahWriteBarrierRB) {
-    __ ldr(dst, Address(dst, BrooksPointer::byte_offset()));
-  }
+  __ ldr(dst, Address(dst, ShenandoahBrooksPointer::byte_offset()));
 
   // Check for evacuation-in-progress and jump to WB slow-path if needed
   __ mov(rscratch2, ShenandoahHeap::EVACUATION | ShenandoahHeap::TRAVERSAL);
@@ -386,9 +383,9 @@ void ShenandoahBarrierSetAssembler::tlab_allocate(MacroAssembler* masm, Register
 
   __ ldr(obj, Address(rthread, JavaThread::tlab_top_offset()));
   if (var_size_in_bytes == noreg) {
-    __ lea(end, Address(obj, (int) (con_size_in_bytes + BrooksPointer::byte_size())));
+    __ lea(end, Address(obj, (int) (con_size_in_bytes + ShenandoahBrooksPointer::byte_size())));
   } else {
-    __ add(var_size_in_bytes, var_size_in_bytes, BrooksPointer::byte_size());
+    __ add(var_size_in_bytes, var_size_in_bytes, ShenandoahBrooksPointer::byte_size());
     __ lea(end, Address(obj, var_size_in_bytes));
   }
   __ ldr(rscratch1, Address(rthread, JavaThread::tlab_end_offset()));
@@ -398,8 +395,8 @@ void ShenandoahBarrierSetAssembler::tlab_allocate(MacroAssembler* masm, Register
   // update the tlab top pointer
   __ str(end, Address(rthread, JavaThread::tlab_top_offset()));
 
-  __ add(obj, obj, BrooksPointer::byte_size());
-  __ str(obj, Address(obj, BrooksPointer::byte_offset()));
+  __ add(obj, obj, ShenandoahBrooksPointer::byte_size());
+  __ str(obj, Address(obj, ShenandoahBrooksPointer::byte_offset()));
 
   // recover var_size_in_bytes if necessary
   if (var_size_in_bytes == end) {
@@ -677,6 +674,6 @@ void ShenandoahBarrierSetAssembler::barrier_stubs_init() {
     CodeBuffer buf(bb);
     StubCodeGenerator cgen(&buf);
     _shenandoah_wb = generate_shenandoah_wb(&cgen, false, true);
-    _shenandoah_wb_C = generate_shenandoah_wb(&cgen, true, !ShenandoahWriteBarrierCsetTestInIR);
+    _shenandoah_wb_C = generate_shenandoah_wb(&cgen, true, false);
   }
 }

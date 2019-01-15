@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -23,7 +23,8 @@
 
 #include "precompiled.hpp"
 
-#include "gc/shenandoah/brooksPointer.hpp"
+#include "gc/shared/gcCause.hpp"
+#include "gc/shenandoah/shenandoahBrooksPointer.hpp"
 #include "gc/shenandoah/shenandoahCollectionSet.inline.hpp"
 #include "gc/shenandoah/shenandoahCollectorPolicy.hpp"
 #include "gc/shenandoah/shenandoahHeap.inline.hpp"
@@ -73,7 +74,8 @@ ShenandoahHeuristics::ShenandoahHeuristics() :
   _last_cycle_end(0),
   _gc_times_learned(0),
   _gc_time_penalties(0),
-  _gc_time_history(new TruncatedSeq(5))
+  _gc_time_history(new TruncatedSeq(5)),
+  _metaspace_oom()
 {
   if (strcmp(ShenandoahUpdateRefsEarly, "on") == 0 ||
       strcmp(ShenandoahUpdateRefsEarly, "true") == 0 ) {
@@ -162,7 +164,7 @@ void ShenandoahHeuristics::choose_collection_set(ShenandoahCollectionSet* collec
       // Reclaim humongous regions here, and count them as the immediate garbage
 #ifdef ASSERT
       bool reg_live = region->has_live();
-      bool bm_live = ctx->is_marked(oop(region->bottom() + BrooksPointer::word_size()));
+      bool bm_live = ctx->is_marked(oop(region->bottom() + ShenandoahBrooksPointer::word_size()));
       assert(reg_live == bm_live,
              "Humongous liveness and marks should agree. Region live: %s; Bitmap live: %s; Region Live Words: " SIZE_FORMAT,
              BOOL_TO_STR(reg_live), BOOL_TO_STR(bm_live), region->get_live_data_words());
@@ -228,6 +230,13 @@ bool ShenandoahHeuristics::should_start_update_refs() {
 }
 
 bool ShenandoahHeuristics::should_start_normal_gc() const {
+  // Perform GC to cleanup metaspace
+  if (has_metaspace_oom()) {
+    // Some of vmTestbase/metaspace tests depend on following line to count GC cycles
+    log_info(gc)("Trigger: %s", GCCause::to_string(GCCause::_metadata_GC_threshold));
+    return true;
+  }
+
   double last_time_ms = (os::elapsedTime() - _last_cycle_end) * 1000;
   bool periodic_gc = (last_time_ms > ShenandoahGuaranteedGCInterval);
   if (periodic_gc) {
@@ -274,7 +283,7 @@ void ShenandoahHeuristics::record_allocation_failure_gc() {
   _bytes_in_cset = 0;
 }
 
-void ShenandoahHeuristics::record_explicit_gc() {
+void ShenandoahHeuristics::record_requested_gc() {
   _bytes_in_cset = 0;
 
   // Assume users call System.gc() when external state changes significantly,
@@ -282,15 +291,34 @@ void ShenandoahHeuristics::record_explicit_gc() {
   _gc_times_learned = 0;
 }
 
-bool ShenandoahHeuristics::should_process_references() {
+bool ShenandoahHeuristics::can_process_references() {
   if (ShenandoahRefProcFrequency == 0) return false;
+  return true;
+}
+
+bool ShenandoahHeuristics::should_process_references() {
+  if (!can_process_references()) return false;
   size_t cycle = ShenandoahHeap::heap()->shenandoah_policy()->cycle_counter();
   // Process references every Nth GC cycle.
   return cycle % ShenandoahRefProcFrequency == 0;
 }
 
-bool ShenandoahHeuristics::should_unload_classes() {
+bool ShenandoahHeuristics::can_unload_classes() {
+  if (!ClassUnloading) return false;
+  return true;
+}
+
+bool ShenandoahHeuristics::can_unload_classes_normal() {
+  if (!can_unload_classes()) return false;
+  if (has_metaspace_oom()) return true;
+  if (!ClassUnloadingWithConcurrentMark) return false;
   if (ShenandoahUnloadClassesFrequency == 0) return false;
+  return true;
+}
+
+bool ShenandoahHeuristics::should_unload_classes() {
+  if (!can_unload_classes_normal()) return false;
+  if (has_metaspace_oom()) return true;
   size_t cycle = ShenandoahHeap::heap()->shenandoah_policy()->cycle_counter();
   // Unload classes every Nth GC cycle.
   // This should not happen in the same cycle as process_references to amortize costs.

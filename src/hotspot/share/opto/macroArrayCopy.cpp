@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,9 +33,9 @@
 #include "utilities/align.hpp"
 #if INCLUDE_SHENANDOAHGC
 #include "gc/shenandoah/c2/shenandoahBarrierSetC2.hpp"
-#include "gc/shenandoah/c2/shenandoahSupport.hpp"
 #include "gc/shenandoah/shenandoahRuntime.hpp"
 #endif
+
 
 void PhaseMacroExpand::insert_mem_bar(Node** ctrl, Node** mem, int opcode, Node* precedent) {
   MemBarNode* mb = MemBarNode::make(C, opcode, Compile::AliasIdxBot, precedent);

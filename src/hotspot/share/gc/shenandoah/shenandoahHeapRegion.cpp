@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2013, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -23,7 +23,7 @@
 
 #include "precompiled.hpp"
 #include "memory/allocation.hpp"
-#include "gc/shenandoah/brooksPointer.hpp"
+#include "gc/shenandoah/shenandoahBrooksPointer.hpp"
 #include "gc/shenandoah/shenandoahHeapRegionSet.inline.hpp"
 #include "gc/shenandoah/shenandoahHeap.hpp"
 #include "gc/shenandoah/shenandoahHeap.inline.hpp"
@@ -52,28 +52,26 @@ size_t ShenandoahHeapRegion::HumongousThresholdWords = 0;
 size_t ShenandoahHeapRegion::MaxTLABSizeBytes = 0;
 size_t ShenandoahHeapRegion::MaxTLABSizeWords = 0;
 
-// start with 1, reserve 0 for uninitialized value
-uint64_t ShenandoahHeapRegion::AllocSeqNum = 1;
+ShenandoahHeapRegion::PaddedAllocSeqNum ShenandoahHeapRegion::_alloc_seq_num;
 
 ShenandoahHeapRegion::ShenandoahHeapRegion(ShenandoahHeap* heap, HeapWord* start,
                                            size_t size_words, size_t index, bool committed) :
   _heap(heap),
-  _region_number(index),
-  _live_data(0),
+  _pacer(ShenandoahPacing ? heap->pacer() : NULL),
   _reserved(MemRegion(start, size_words)),
+  _region_number(index),
+  _new_top(NULL),
+  _critical_pins(0),
+  _empty_time(os::elapsedTime()),
+  _state(committed ? _empty_committed : _empty_uncommitted),
   _tlab_allocs(0),
   _gclab_allocs(0),
   _shared_allocs(0),
-  _new_top(NULL),
-  _critical_pins(0),
   _seqnum_first_alloc_mutator(0),
   _seqnum_first_alloc_gc(0),
   _seqnum_last_alloc_mutator(0),
   _seqnum_last_alloc_gc(0),
-  _state(committed ? _empty_committed : _empty_uncommitted),
-  _empty_time(os::elapsedTime()),
-  _initialized(false),
-  _pacer(ShenandoahPacing ? heap->pacer() : NULL) {
+  _live_data(0) {
 
   ContiguousSpace::initialize(_reserved, true, committed);
 }
@@ -344,7 +342,7 @@ void ShenandoahHeapRegion::reset_alloc_metadata_to_shared() {
     _tlab_allocs = 0;
     _gclab_allocs = 0;
     _shared_allocs = used() >> LogHeapWordSize;
-    uint64_t next = AllocSeqNum++;
+    uint64_t next = _alloc_seq_num.value++;
     _seqnum_first_alloc_mutator = next;
     _seqnum_last_alloc_mutator = next;
     _seqnum_first_alloc_gc = 0;
@@ -439,7 +437,7 @@ void ShenandoahHeapRegion::print_on(outputStream* st) const {
   st->print("|S " SIZE_FORMAT_W(5) "%1s", byte_size_in_proper_unit(get_shared_allocs()),   proper_unit_for_byte_size(get_shared_allocs()));
   st->print("|L " SIZE_FORMAT_W(5) "%1s", byte_size_in_proper_unit(get_live_data_bytes()), proper_unit_for_byte_size(get_live_data_bytes()));
   st->print("|CP " SIZE_FORMAT_W(3), _critical_pins);
-  st->print("|SN " UINT64_FORMAT_HEX_W(12) ", " UINT64_FORMAT_HEX_W(8) ", " UINT64_FORMAT_HEX_W(8) ", " UINT64_FORMAT_HEX_W(8),
+  st->print("|SN " UINT64_FORMAT_X_W(12) ", " UINT64_FORMAT_X_W(8) ", " UINT64_FORMAT_X_W(8) ", " UINT64_FORMAT_X_W(8),
             seqnum_first_alloc_mutator(), seqnum_last_alloc_mutator(),
             seqnum_first_alloc_gc(), seqnum_last_alloc_gc());
   st->cr();
@@ -456,12 +454,12 @@ void ShenandoahHeapRegion::oop_iterate(OopIterateClosure* blk) {
 
 void ShenandoahHeapRegion::oop_iterate_objects(OopIterateClosure* blk) {
   assert(! is_humongous(), "no humongous region here");
-  HeapWord* obj_addr = bottom() + BrooksPointer::word_size();
+  HeapWord* obj_addr = bottom() + ShenandoahBrooksPointer::word_size();
   HeapWord* t = top();
   // Could call objects iterate, but this is easier.
   while (obj_addr < t) {
     oop obj = oop(obj_addr);
-    obj_addr += obj->oop_iterate_size(blk) + BrooksPointer::word_size();
+    obj_addr += obj->oop_iterate_size(blk) + ShenandoahBrooksPointer::word_size();
   }
 }
 
@@ -470,7 +468,7 @@ void ShenandoahHeapRegion::oop_iterate_humongous(OopIterateClosure* blk) {
   // Find head.
   ShenandoahHeapRegion* r = humongous_start_region();
   assert(r->is_humongous_start(), "need humongous head here");
-  oop obj = oop(r->bottom() + BrooksPointer::word_size());
+  oop obj = oop(r->bottom() + ShenandoahBrooksPointer::word_size());
   obj->oop_iterate(blk, MemRegion(bottom(), top()));
 }
 
@@ -509,11 +507,11 @@ HeapWord* ShenandoahHeapRegion::block_start_const(const void* p) const {
   if (p >= top()) {
     return top();
   } else {
-    HeapWord* last = bottom() + BrooksPointer::word_size();
+    HeapWord* last = bottom() + ShenandoahBrooksPointer::word_size();
     HeapWord* cur = last;
     while (cur <= p) {
       last = cur;
-      cur += oop(cur)->size() + BrooksPointer::word_size();
+      cur += oop(cur)->size() + ShenandoahBrooksPointer::word_size();
     }
     shenandoah_assert_correct(NULL, oop(last));
     return last;
@@ -597,7 +595,7 @@ void ShenandoahHeapRegion::setup_sizes(size_t initial_heap_size, size_t max_heap
   // Recalculate the region size to make sure it's a power of
   // 2. This means that region_size is the largest power of 2 that's
   // <= what we've calculated so far.
-  region_size = (1u << region_size_log);
+  region_size = size_t(1) << region_size_log;
 
   // Now, set up the globals.
   guarantee(RegionSizeBytesShift == 0, "we should only set it once");
@@ -663,42 +661,21 @@ void ShenandoahHeapRegion::setup_sizes(size_t initial_heap_size, size_t max_heap
 }
 
 void ShenandoahHeapRegion::do_commit() {
-  if (_initialized && can_idle_region()) {
-    os::activate_memory((char *)_reserved.start(), _reserved.byte_size());
-    _heap->activate_bitmap_slice(this);
-  } else {
-    if (!os::commit_memory((char *) _reserved.start(), _reserved.byte_size(), false)) {
-      report_java_out_of_memory("Unable to commit region");
-    }
-    if (!_heap->commit_bitmap_slice(this)) {
-      report_java_out_of_memory("Unable to commit bitmaps for region");
-    }
-
-    _initialized = true;
+  if (!os::commit_memory((char *) _reserved.start(), _reserved.byte_size(), false)) {
+    report_java_out_of_memory("Unable to commit region");
+  }
+  if (!_heap->commit_bitmap_slice(this)) {
+    report_java_out_of_memory("Unable to commit bitmaps for region");
   }
   _heap->increase_committed(ShenandoahHeapRegion::region_size_bytes());
 }
 
 void ShenandoahHeapRegion::do_uncommit() {
-  if (can_idle_region()) {
-    if (!os::idle_memory((char *)_reserved.start(), _reserved.byte_size())) {
-      report_java_out_of_memory("Unable to idle the region");
-    }
-
-    if (!_heap->idle_bitmap_slice(this)) {
-      report_java_out_of_memory("Unable to idle bitmaps for region");
-    }
-  } else {
-    if (!os::uncommit_memory((char *) _reserved.start(), _reserved.byte_size())) {
-      report_java_out_of_memory("Unable to uncommit region");
-    }
-    if (!_heap->uncommit_bitmap_slice(this)) {
-      report_java_out_of_memory("Unable to uncommit bitmaps for region");
-    }
+  if (!os::uncommit_memory((char *) _reserved.start(), _reserved.byte_size())) {
+    report_java_out_of_memory("Unable to uncommit region");
+  }
+  if (!_heap->uncommit_bitmap_slice(this)) {
+    report_java_out_of_memory("Unable to uncommit bitmaps for region");
   }
   _heap->decrease_committed(ShenandoahHeapRegion::region_size_bytes());
-}
-
-bool ShenandoahHeapRegion::can_idle_region() const {
-  return LINUX_ONLY(ShenandoahUncommitWithIdle && !UseLargePages) NOT_LINUX(false);
 }

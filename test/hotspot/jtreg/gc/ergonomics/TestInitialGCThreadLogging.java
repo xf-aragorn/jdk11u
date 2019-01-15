@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,10 +29,14 @@
  * @key gc
  * @modules java.base/jdk.internal.misc
  * @library /test/lib
+ * @build sun.hotspot.WhiteBox
+ * @run driver ClassFileInstaller sun.hotspot.WhiteBox sun.hotspot.WhiteBox$WhiteBoxPermission
+ * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI TestInitialGCThreadLogging
  */
 
 import jdk.test.lib.process.ProcessTools;
 import jdk.test.lib.process.OutputAnalyzer;
+import sun.hotspot.gc.GC;
 
 public class TestInitialGCThreadLogging {
   public static void main(String[] args) throws Exception {
@@ -43,7 +47,9 @@ public class TestInitialGCThreadLogging {
 
     testInitialGCThreadLogging("UseParallelGC", "ParGC Thread");
 
-    testInitialGCThreadLogging("UseShenandoahGC", "Shenandoah GC Thread");
+    if (GC.Shenandoah.isSupported()) {
+        testInitialGCThreadLogging("UseShenandoahGC", "Shenandoah GC Thread");
+    }
   }
 
   private static void verifyDynamicNumberOfGCThreads(OutputAnalyzer output, String threadName) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2017, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -25,6 +25,7 @@
  * @test TestExplicitGCNoConcurrent
  * @summary Test that Shenandoah reacts to explicit GC flags appropriately
  * @key gc
+ * @requires vm.gc.Shenandoah
  * @library /test/lib
  * @modules java.base/jdk.internal.misc
  *          java.management
@@ -44,30 +45,30 @@ public class TestExplicitGCNoConcurrent {
         }
 
         String[] concurrent = new String[] {
-            "Pause Init Mark",
-            "Pause Final Mark",
-            "Pause Init Update Refs",
-            "Pause Final Update Refs",
-            "Pause Init Traversal",
-            "Pause Final Traversal",
+                "Pause Init Mark",
+                "Pause Final Mark",
+                "Pause Init Update Refs",
+                "Pause Final Update Refs",
+                "Pause Init Traversal",
+                "Pause Final Traversal",
         };
 
         String[] opts = new String[] {
-            "",
-            "-XX:-ExplicitGCInvokesConcurrent",
-            "-XX:+ExplicitGCInvokesConcurrent"
+                "",
+                "-XX:-ExplicitGCInvokesConcurrent",
+                "-XX:+ExplicitGCInvokesConcurrent"
         };
 
         for (String opt : opts) {
             ProcessBuilder pb = ProcessTools.createJavaProcessBuilder(
-                                    "-XX:+UnlockExperimentalVMOptions",
-                                    "-XX:+UseShenandoahGC",
-                                    "-Xlog:gc",
-                                    "-XX:+UnlockDiagnosticVMOptions",
-                                    opt,
-                                    "-XX:ShenandoahGCHeuristics=passive",
-                                    TestExplicitGCNoConcurrent.class.getName(),
-                                    "test");
+                    "-XX:+UnlockExperimentalVMOptions",
+                    "-XX:+UseShenandoahGC",
+                    "-Xlog:gc",
+                    "-XX:+UnlockDiagnosticVMOptions",
+                    opt,
+                    "-XX:ShenandoahGCHeuristics=passive",
+                    TestExplicitGCNoConcurrent.class.getName(),
+                    "test");
             OutputAnalyzer output = new OutputAnalyzer(pb.start());
             for (String p : concurrent) {
                 output.shouldNotContain(p);

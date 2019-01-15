@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -304,10 +304,12 @@ BitMap::inverted_bit_mask_for_range(idx_t beg, idx_t end) const {
 }
 
 inline void BitMap::set_large_range_of_words(idx_t beg, idx_t end) {
+  assert(!UseShenandoahGC || (beg <= end), "underflow"); // Make sure Shenandoah does not blow up on JDK-8211926
   memset(_map + beg, ~(unsigned char)0, (end - beg) * sizeof(bm_word_t));
 }
 
 inline void BitMap::clear_large_range_of_words(idx_t beg, idx_t end) {
+  assert(!UseShenandoahGC || (beg <= end), "underflow"); // Make sure Shenandoah does not blow up on JDK-8211926
   memset(_map + beg, 0, (end - beg) * sizeof(bm_word_t));
 }
 

@@ -29,8 +29,7 @@ import sun.jvm.hotspot.gc.epsilon.*;
 import sun.jvm.hotspot.gc.g1.*;
 import sun.jvm.hotspot.gc.parallel.*;
 import sun.jvm.hotspot.gc.serial.*;
-import sun.jvm.hotspot.gc.shenandoah.ShenandoahHeap;
-import sun.jvm.hotspot.gc.shenandoah.ShenandoahHeapRegion;
+import sun.jvm.hotspot.gc.shenandoah.*;
 import sun.jvm.hotspot.gc.shared.*;
 import sun.jvm.hotspot.gc.z.*;
 import sun.jvm.hotspot.debugger.JVMDebugger;
@@ -192,6 +191,14 @@ public class HeapSummary extends Tool {
        l = getFlagValue("UseZGC", flagMap);
        if (l == 1L) {
            System.out.print("ZGC ");
+           l = getFlagValue("ParallelGCThreads", flagMap);
+           System.out.println("with " + l + " thread(s)");
+           return;
+       }
+
+       l = getFlagValue("UseShenandoahGC", flagMap);
+       if (l == 1L) {
+           System.out.print("Shenandoah GC ");
            l = getFlagValue("ParallelGCThreads", flagMap);
            System.out.println("with " + l + " thread(s)");
            return;

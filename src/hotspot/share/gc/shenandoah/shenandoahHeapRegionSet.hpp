@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2017, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2013, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -33,8 +33,11 @@ class ShenandoahHeapRegionSet;
 class ShenandoahHeapRegionSetIterator : public StackObj {
 private:
   const ShenandoahHeapRegionSet* _set;
-  volatile jint _current_index;
   ShenandoahHeap* const _heap;
+
+  DEFINE_PAD_MINUS_SIZE(0, DEFAULT_CACHE_LINE_SIZE, sizeof(volatile jint));
+  volatile jint _current_index;
+  DEFINE_PAD_MINUS_SIZE(1, DEFAULT_CACHE_LINE_SIZE, 0);
 
   // No implicit copying: iterators should be passed by reference to capture the state
   ShenandoahHeapRegionSetIterator(const ShenandoahHeapRegionSetIterator& that);

@@ -179,7 +179,6 @@ final class SupportedGroupsExtension {
         // Elliptic Curves (RFC 4492)
         //
         // See sun.security.util.CurveDB for the OIDs
-
         // NIST P-256
         SECP256_R1  (0x0017, "secp256r1", "1.2.840.10045.3.1.7", true,
                             ProtocolVersion.PROTOCOLS_TO_13),
@@ -455,6 +454,12 @@ final class SupportedGroupsExtension {
                         NamedGroup.SECP256_R1,
                         NamedGroup.SECP384_R1,
                         NamedGroup.SECP521_R1,
+                        NamedGroup.SECT283_K1,
+                        NamedGroup.SECT283_R1,
+                        NamedGroup.SECT409_K1,
+                        NamedGroup.SECT409_R1,
+                        NamedGroup.SECT571_K1,
+                        NamedGroup.SECT571_R1,
 
                         // FFDHE 2048
                         NamedGroup.FFDHE_2048,
@@ -469,6 +474,15 @@ final class SupportedGroupsExtension {
                         NamedGroup.SECP256_R1,
                         NamedGroup.SECP384_R1,
                         NamedGroup.SECP521_R1,
+                        NamedGroup.SECT283_K1,
+                        NamedGroup.SECT283_R1,
+                        NamedGroup.SECT409_K1,
+                        NamedGroup.SECT409_R1,
+                        NamedGroup.SECT571_K1,
+                        NamedGroup.SECT571_R1,
+
+                        // non-NIST curves
+                        NamedGroup.SECP256_K1,
 
                         // FFDHE 2048
                         NamedGroup.FFDHE_2048,

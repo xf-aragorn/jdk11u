@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -26,6 +26,7 @@
 
 #include "gc/shenandoah/shenandoahHeap.hpp"
 #include "gc/shenandoah/shenandoahPhaseTimings.hpp"
+#include "gc/shenandoah/shenandoahSharedVariables.hpp"
 #include "memory/allocation.hpp"
 #include "runtime/globals_extension.hpp"
 
@@ -50,6 +51,14 @@
     if (FLAG_IS_DEFAULT(name)) {                                            \
       log_info(gc)("Heuristics ergonomically sets -XX:" #name "=" #value);  \
       FLAG_SET_DEFAULT(name, value);                                        \
+    }                                                                       \
+  } while (0)
+
+#define SHENANDOAH_CHECK_FLAG_SET(name)                                     \
+  do {                                                                      \
+    if (!name) {                                                            \
+      err_msg message("Heuristics needs -XX:+" #name " to work correctly"); \
+      vm_exit_during_initialization("Error", message);                      \
     }                                                                       \
   } while (0)
 
@@ -86,6 +95,9 @@ protected:
   size_t _gc_time_penalties;
   TruncatedSeq* _gc_time_history;
 
+  // There may be many threads that contend to set this flag
+  ShenandoahSharedFlag _metaspace_oom;
+
   static int compare_by_garbage(RegionData a, RegionData b);
   static int compare_by_garbage_then_alloc_seq_ascending(RegionData a, RegionData b);
   static int compare_by_alloc_seq_ascending(RegionData a, RegionData b);
@@ -104,6 +116,10 @@ public:
   void record_gc_start();
 
   void record_gc_end();
+
+  void record_metaspace_oom()     { _metaspace_oom.set(); }
+  void clear_metaspace_oom()      { _metaspace_oom.unset(); }
+  bool has_metaspace_oom() const  { return _metaspace_oom.is_set(); }
 
   virtual void record_cycle_start();
 
@@ -129,12 +145,15 @@ public:
 
   virtual void record_allocation_failure_gc();
 
-  virtual void record_explicit_gc();
+  virtual void record_requested_gc();
 
   virtual void choose_collection_set(ShenandoahCollectionSet* collection_set);
 
+  virtual bool can_process_references();
   virtual bool should_process_references();
 
+  virtual bool can_unload_classes();
+  virtual bool can_unload_classes_normal();
   virtual bool should_unload_classes();
 
   virtual const char* name() = 0;

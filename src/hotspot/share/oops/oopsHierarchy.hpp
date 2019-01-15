@@ -28,9 +28,6 @@
 #include "metaprogramming/integralConstant.hpp"
 #include "metaprogramming/primitiveConversions.hpp"
 #include "runtime/globals.hpp"
-#if INCLUDE_SHENANDOAHGC
-#include "gc/shenandoah/shenandoah_globals.hpp"
-#endif
 #include "utilities/globalDefinitions.hpp"
 
 // OBJECT hierarchy
@@ -106,7 +103,7 @@ public:
   oopDesc*  operator->() const        { return obj(); }
   bool operator==(const oop o) const  {
 #if INCLUDE_SHENANDOAHGC
-    if (VerifyObjectEquals) {
+    if (ShenandoahVerifyObjectEquals) {
       ShouldNotReachHere();
     }
 #endif
@@ -115,7 +112,7 @@ public:
   bool operator==(void *p) const      { return obj() == p; }
   bool operator!=(const volatile oop o) const  {
 #if INCLUDE_SHENANDOAHGC
-    if (VerifyObjectEquals) {
+    if (ShenandoahVerifyObjectEquals) {
       ShouldNotReachHere();
     }
 #endif

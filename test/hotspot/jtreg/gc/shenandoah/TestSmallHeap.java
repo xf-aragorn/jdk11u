@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2017, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -23,6 +23,8 @@
 
 /*
  * @test TestSmallHeap
+ * @key gc
+ * @requires vm.gc.Shenandoah
  *
  * @run main/othervm -XX:+UnlockExperimentalVMOptions -XX:+UseShenandoahGC         TestSmallHeap
  * @run main/othervm -XX:+UnlockExperimentalVMOptions -XX:+UseShenandoahGC -Xmx64m TestSmallHeap
@@ -34,8 +36,8 @@
 
 public class TestSmallHeap {
 
-  public static void main(String[] args) throws Exception {
-    System.out.println("Hello World!");
-  }
+    public static void main(String[] args) throws Exception {
+        System.out.println("Hello World!");
+    }
 
 }

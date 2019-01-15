@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -38,7 +38,6 @@ ShenandoahTraversalHeuristics::ShenandoahTraversalHeuristics() : ShenandoahHeuri
   FLAG_SET_DEFAULT(ShenandoahStoreValReadBarrier,    false);
   FLAG_SET_DEFAULT(ShenandoahStoreValEnqueueBarrier, true);
   FLAG_SET_DEFAULT(ShenandoahKeepAliveBarrier,       false);
-  FLAG_SET_DEFAULT(ShenandoahWriteBarrierRB,         false);
   FLAG_SET_DEFAULT(ShenandoahAllowMixedAllocs,       false);
 
   SHENANDOAH_ERGO_OVERRIDE_DEFAULT(ShenandoahRefProcFrequency, 1);
@@ -47,6 +46,17 @@ ShenandoahTraversalHeuristics::ShenandoahTraversalHeuristics() : ShenandoahHeuri
   if (ClassUnloadingWithConcurrentMark) {
     SHENANDOAH_ERGO_OVERRIDE_DEFAULT(ShenandoahUnloadClassesFrequency, 1);
   }
+
+  SHENANDOAH_ERGO_ENABLE_FLAG(ExplicitGCInvokesConcurrent);
+  SHENANDOAH_ERGO_ENABLE_FLAG(ShenandoahImplicitGCInvokesConcurrent);
+
+  // Final configuration checks
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahReadBarrier);
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahWriteBarrier);
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahStoreValEnqueueBarrier);
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahCASBarrier);
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahAcmpBarrier);
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahCloneBarrier);
 }
 
 bool ShenandoahTraversalHeuristics::should_start_normal_gc() const {

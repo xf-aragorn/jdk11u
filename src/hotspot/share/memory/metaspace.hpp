@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -71,6 +71,7 @@ namespace metaspace {
   class PrintCLDMetaspaceInfoClosure;
   class SpaceManager;
   class VirtualSpaceList;
+  class VirtualSpaceNode;
 }
 
 // Metaspaces each have a  SpaceManager and allocations
@@ -230,6 +231,7 @@ class Metaspace : public AllStatic {
 class ClassLoaderMetaspace : public CHeapObj<mtClass> {
   friend class CollectedHeap; // For expand_and_allocate()
   friend class ZCollectedHeap; // For expand_and_allocate()
+  friend class ShenandoahHeap; // For expand_and_allocate()
   friend class Metaspace;
   friend class MetaspaceUtils;
   friend class metaspace::PrintCLDMetaspaceInfoClosure;
@@ -297,6 +299,10 @@ class MetaspaceUtils : AllStatic {
   // Spacemanager updates running counters.
   friend class metaspace::SpaceManager;
 
+  // Special access for error reporting (checks without locks).
+  friend class oopDesc;
+  friend class Klass;
+
   // Running counters for statistics concerning in-use chunks.
   // Note: capacity = used + free + waste + overhead. Note that we do not
   // count free and waste. Their sum can be deduces from the three other values.
@@ -323,6 +329,12 @@ class MetaspaceUtils : AllStatic {
 
   // Helper for print_xx_report.
   static void print_vs(outputStream* out, size_t scale);
+
+  // Utils to check if a pointer or range is part of a committed metaspace region
+  // without acquiring any locks.
+  static metaspace::VirtualSpaceNode* find_enclosing_virtual_space(const void* p);
+  static bool is_in_committed(const void* p);
+  static bool is_range_in_committed(const void* from, const void* to);
 
 public:
 

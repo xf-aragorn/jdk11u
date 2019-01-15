@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018 Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -24,6 +24,8 @@
 /**
  * @test TestClassLoaderLeak
  * @summary Test OOME in due to classloader leak
+ * @key gc
+ * @requires vm.gc.Shenandoah
  * @library /test/lib
  * @run main TestClassLoaderLeak
  */
@@ -32,12 +34,13 @@ import java.util.*;
 import java.io.*;
 import java.nio.*;
 import java.nio.file.*;
+
 import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.process.ProcessTools;
 
 public class TestClassLoaderLeak {
 
-    static final int SIZE  = 1*1024*1024;
+    static final int SIZE = 1 * 1024 * 1024;
     static final int COUNT = 128;
 
     static volatile Object sink;
@@ -71,7 +74,7 @@ public class TestClassLoaderLeak {
 
     static void load(String path) throws Exception {
         ClassLoader cl = new MyClassLoader(path);
-        Class<Dummy> c = (Class<Dummy>)Class.forName("TestClassLoaderLeak$Dummy", true, cl);
+        Class<Dummy> c = (Class<Dummy>) Class.forName("TestClassLoaderLeak$Dummy", true, cl);
         if (c.getClassLoader() != cl) {
             throw new IllegalStateException("Should have loaded by target loader");
         }
@@ -122,12 +125,12 @@ public class TestClassLoaderLeak {
         }
 
         String[] heuristics = new String[] {
-           "adaptive",
-           "compact",
-           "static",
-           "traversal",
-           "aggressive",
-           "passive",
+                "adaptive",
+                "compact",
+                "static",
+                "traversal",
+                "aggressive",
+                "passive",
         };
 
         for (String h : heuristics) {

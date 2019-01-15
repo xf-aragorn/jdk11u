@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2006, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,7 +31,7 @@
 #include "opto/rootnode.hpp"
 #include "utilities/macros.hpp"
 #if INCLUDE_SHENANDOAHGC
-#include "gc/shenandoah/c2/shenandoahSupport.hpp"
+#include "gc/shenandoah/c2/shenandoahBarrierSetC2.hpp"
 #endif
 
 //================= Loop Unswitching =====================

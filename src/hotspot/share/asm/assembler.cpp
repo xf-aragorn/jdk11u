@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,11 +26,14 @@
 #include "asm/codeBuffer.hpp"
 #include "asm/macroAssembler.hpp"
 #include "asm/macroAssembler.inline.hpp"
-#include "gc/shenandoah/brooksPointer.hpp"
 #include "runtime/atomic.hpp"
 #include "runtime/icache.hpp"
 #include "runtime/os.hpp"
 #include "runtime/thread.hpp"
+#include "utilities/macros.hpp"
+#if INCLUDE_SHENANDOAHGC
+#include "gc/shenandoah/shenandoahBarrierSetAssembler.hpp"
+#endif
 
 
 // Implementation of AbstractAssembler
@@ -316,7 +319,13 @@ bool MacroAssembler::needs_explicit_null_check(intptr_t offset) {
     // the 'offset' is equal to [heap_base + offset] for
     // narrow oop implicit null checks.
     uintptr_t base = (uintptr_t)Universe::narrow_oop_base();
-    int adj = MIN2(0, UseShenandoahGC ? BrooksPointer::byte_offset() : 0);
+    int adj = 0;
+#if INCLUDE_SHENANDOAHGC
+    if (UseShenandoahGC) {
+      adj = ShenandoahBrooksPointer::byte_offset();
+      assert(adj < 0, "no need for positive adjustments");
+    }
+#endif
     if ((uintptr_t)((offset - adj) & address_bits) >= base) {
       // Normalize offset for the next check.
       offset = (intptr_t)(pointer_delta((void*)offset, (void*)base, 1));
@@ -324,11 +333,11 @@ bool MacroAssembler::needs_explicit_null_check(intptr_t offset) {
   }
 #endif
 
-  if (UseShenandoahGC) {
-    if ((offset & address_bits) == (BrooksPointer::byte_offset() & address_bits)) {
-      return false;
-    }
+#if INCLUDE_SHENANDOAHGC
+  if (UseShenandoahGC && ((offset & address_bits) == (ShenandoahBrooksPointer::byte_offset() & address_bits))) {
+    return false;
   }
+#endif
 
   return offset < 0 || os::vm_page_size() <= offset;
 }

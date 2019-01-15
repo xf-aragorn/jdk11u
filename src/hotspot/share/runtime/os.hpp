@@ -140,8 +140,6 @@ class os: AllStatic {
   static void   pd_free_memory(char *addr, size_t bytes, size_t alignment_hint);
   static void   pd_realign_memory(char *addr, size_t bytes, size_t alignment_hint);
 
-  static bool   pd_idle_memory(char* addr, size_t bytes);
-
   static size_t page_size_for_region(size_t region_size, size_t min_pages, bool must_be_aligned);
 
   // Get summary strings for system information in buffer provided
@@ -304,6 +302,9 @@ class os: AllStatic {
     return _page_sizes[0];
   }
 
+  // Return a lower bound for page sizes. Also works before os::init completed.
+  static size_t min_page_size() { return 4 * K; }
+
   // Methods for tracing page sizes returned by the above method.
   // The region_{min,max}_size parameters should be the values
   // passed to page_size_for_region() and page_size should be the result of that
@@ -379,10 +380,6 @@ class os: AllStatic {
   static void   free_memory(char *addr, size_t bytes, size_t alignment_hint);
   static void   realign_memory(char *addr, size_t bytes, size_t alignment_hint);
 
-  // Hint the memory is no longer needed
-  static bool   idle_memory(char* addr, size_t bytes);
-  static void   activate_memory(char* addr, size_t bytes);
-
   // NUMA-specific interface
   static bool   numa_has_static_binding();
   static bool   numa_has_group_homing();
@@ -420,6 +417,7 @@ class os: AllStatic {
 
   // Check if pointer points to readable memory (by 4-byte read access)
   static bool    is_readable_pointer(const void* p);
+  static bool    is_readable_range(const void* from, const void* to);
 
   // Routines used to serialize the thread state without using membars
   static void    serialize_thread_states();
@@ -544,7 +542,7 @@ class os: AllStatic {
   static char* do_you_want_to_debug(const char* message);
 
   // run cmd in a separate process and return its exit code; or -1 on failures
-  static int fork_and_exec(char *cmd);
+  static int fork_and_exec(char *cmd, bool use_vfork_if_available = false);
 
   // Call ::exit() on all platforms but Windows
   static void exit(int num);

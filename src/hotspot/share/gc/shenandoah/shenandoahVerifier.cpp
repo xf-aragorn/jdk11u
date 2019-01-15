@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, Red Hat, Inc. and/or its affiliates.
+ * Copyright (c) 2017, 2018, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -23,14 +23,14 @@
 
 #include "precompiled.hpp"
 
-#include "gc/shenandoah/brooksPointer.hpp"
 #include "gc/shenandoah/shenandoahAsserts.hpp"
+#include "gc/shenandoah/shenandoahBrooksPointer.hpp"
 #include "gc/shenandoah/shenandoahPhaseTimings.hpp"
 #include "gc/shenandoah/shenandoahHeap.hpp"
 #include "gc/shenandoah/shenandoahHeap.inline.hpp"
-//#include "gc/shenandoah/shenandoahMarkingContext.inline.hpp"
 #include "gc/shenandoah/shenandoahRootProcessor.hpp"
 #include "gc/shenandoah/shenandoahTaskqueue.hpp"
+#include "gc/shenandoah/shenandoahUtils.hpp"
 #include "gc/shenandoah/shenandoahVerifier.hpp"
 #include "memory/allocation.hpp"
 #include "memory/iterator.inline.hpp"
@@ -138,7 +138,7 @@ private:
           // skip
           break;
         case ShenandoahVerifier::_verify_liveness_complete:
-          Atomic::add(obj->size() + BrooksPointer::word_size(), &_ld[obj_reg->region_number()]);
+          Atomic::add(obj->size() + ShenandoahBrooksPointer::word_size(), &_ld[obj_reg->region_number()]);
           // fallthrough for fast failure for un-live regions:
         case ShenandoahVerifier::_verify_liveness_conservative:
           check(ShenandoahAsserts::_safe_oop, obj, obj_reg->has_live(),
@@ -149,7 +149,7 @@ private:
       }
     }
 
-    oop fwd = (oop) BrooksPointer::get_raw_unchecked(obj);
+    oop fwd = (oop) ShenandoahBrooksPointer::get_raw_unchecked(obj);
 
     ShenandoahHeapRegion* fwd_reg = NULL;
 
@@ -182,7 +182,7 @@ private:
       check(ShenandoahAsserts::_safe_oop, obj, (fwd_addr + fwd->size()) <= fwd_reg->top(),
              "Forwardee end should be within the region");
 
-      oop fwd2 = (oop) BrooksPointer::get_raw_unchecked(fwd);
+      oop fwd2 = (oop) ShenandoahBrooksPointer::get_raw_unchecked(fwd);
       check(ShenandoahAsserts::_safe_oop, obj, oopDesc::unsafe_equals(fwd, fwd2),
              "Double forwarding");
     } else {
@@ -292,11 +292,10 @@ private:
 public:
   ShenandoahCalculateRegionStatsClosure() : _used(0), _committed(0), _garbage(0) {};
 
-  bool heap_region_do(ShenandoahHeapRegion* r) {
+  void heap_region_do(ShenandoahHeapRegion* r) {
     _used += r->used();
     _garbage += r->garbage();
     _committed += r->is_committed() ? ShenandoahHeapRegion::region_size_bytes() : 0;
-    return false;
   }
 
   size_t used() { return _used; }
@@ -333,7 +332,7 @@ public:
     }
   }
 
-  bool heap_region_do(ShenandoahHeapRegion* r) {
+  void heap_region_do(ShenandoahHeapRegion* r) {
     switch (_regions) {
       case ShenandoahVerifier::_verify_regions_disable:
         break;
@@ -414,8 +413,6 @@ public:
 
     verify(r, r->seqnum_first_alloc_gc() <= r->seqnum_last_alloc_gc(),
            "First GC seqnum should not be greater than last seqnum");
-
-    return false;
   }
 };
 
@@ -532,7 +529,7 @@ public:
 
   virtual void work_humongous(ShenandoahHeapRegion *r, ShenandoahVerifierStack& stack, ShenandoahVerifyOopClosure& cl) {
     size_t processed = 0;
-    HeapWord* obj = r->bottom() + BrooksPointer::word_size();
+    HeapWord* obj = r->bottom() + ShenandoahBrooksPointer::word_size();
     if (_heap->complete_marking_context()->is_marked((oop)obj)) {
       verify_and_follow(obj, stack, cl, &processed);
     }
@@ -546,12 +543,12 @@ public:
 
     // Bitmaps, before TAMS
     if (tams > r->bottom()) {
-      HeapWord* start = r->bottom() + BrooksPointer::word_size();
+      HeapWord* start = r->bottom() + ShenandoahBrooksPointer::word_size();
       HeapWord* addr = mark_bit_map->getNextMarkedWordAddress(start, tams);
 
       while (addr < tams) {
         verify_and_follow(addr, stack, cl, &processed);
-        addr += BrooksPointer::word_size();
+        addr += ShenandoahBrooksPointer::word_size();
         if (addr < tams) {
           addr = mark_bit_map->getNextMarkedWordAddress(addr, tams);
         }
@@ -561,11 +558,11 @@ public:
     // Size-based, after TAMS
     {
       HeapWord* limit = r->top();
-      HeapWord* addr = tams + BrooksPointer::word_size();
+      HeapWord* addr = tams + ShenandoahBrooksPointer::word_size();
 
       while (addr < limit) {
         verify_and_follow(addr, stack, cl, &processed);
-        addr += oop(addr)->size() + BrooksPointer::word_size();
+        addr += oop(addr)->size() + ShenandoahBrooksPointer::word_size();
       }
     }
 
@@ -672,9 +669,7 @@ void ShenandoahVerifier::verify_at_safepoint(const char *label,
   // Internal heap region checks
   if (ShenandoahVerifyLevel >= 1) {
     ShenandoahVerifyHeapRegionClosure cl(label, regions);
-    _heap->heap_region_iterate(&cl,
-            /* skip_cset = */ false,
-            /* skip_humongous_cont = */ false);
+    _heap->heap_region_iterate(&cl);
   }
 
   OrderAccess::fence();
@@ -803,14 +798,12 @@ void ShenandoahVerifier::verify_after_concmark() {
 }
 
 void ShenandoahVerifier::verify_before_evacuation() {
-  // Evacuation is always preceded by mark, but we want to have a sanity check after
-  // selecting the collection set, and (immediate) regions recycling
   verify_at_safepoint(
           "Before Evacuation",
           _verify_forwarded_none,    // no forwarded references
           _verify_marked_complete,   // walk over marked objects too
-          _verify_cset_disable,      // skip, verified after mark
-          _verify_liveness_disable,  // skip, verified after mark
+          _verify_cset_disable,      // non-forwarded references to cset expected
+          _verify_liveness_complete, // liveness data must be complete here
           _verify_regions_disable,   // trash regions not yet recycled
           _verify_gcstate_stable     // mark should have stabilized the heap
   );

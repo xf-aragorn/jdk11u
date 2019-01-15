@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, Red Hat, Inc. All rights reserved.
+ * Copyright (c) 2017, 2018, Red Hat, Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,8 +22,10 @@
  */
 
 /**
- * @test
+ * @test TestMaybeNullUnsafeAccess
  * @summary cast before unsafe access moved in dominating null check null path causes crash
+ * @key gc
+ * @requires vm.gc.Shenandoah
  * @modules java.base/jdk.internal.misc:+open
  *
  * @run main/othervm -XX:-UseOnStackReplacement -XX:-BackgroundCompilation -XX:-TieredCompilation TestMaybeNullUnsafeAccess
@@ -31,6 +33,7 @@
  */
 
 import jdk.internal.misc.Unsafe;
+
 import java.lang.reflect.Field;
 
 public class TestMaybeNullUnsafeAccess {
@@ -52,7 +55,7 @@ public class TestMaybeNullUnsafeAccess {
     }
 
     static A test_helper(Object o) {
-        return (A)o;
+        return (A) o;
     }
 
     static int test(Object o) {
