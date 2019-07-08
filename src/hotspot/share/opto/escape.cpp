@@ -515,6 +515,10 @@ void ConnectionGraph::add_node_to_connection_graph(Node *n, Unique_Node_List *de
     }
     case Op_CompareAndExchangeP:
     case Op_CompareAndExchangeN:
+#if INCLUDE_SHENANDOAHGC
+    case Op_ShenandoahCompareAndExchangeP:
+    case Op_ShenandoahCompareAndExchangeN:
+#endif
     case Op_GetAndSetP:
     case Op_GetAndSetN: {
       add_objload_to_connection_graph(n, delayed_worklist);
@@ -524,6 +528,12 @@ void ConnectionGraph::add_node_to_connection_graph(Node *n, Unique_Node_List *de
     case Op_StoreN:
     case Op_StoreNKlass:
     case Op_StorePConditional:
+#if INCLUDE_SHENANDOAHGC
+    case Op_ShenandoahWeakCompareAndSwapP:
+    case Op_ShenandoahWeakCompareAndSwapN:
+    case Op_ShenandoahCompareAndSwapP:
+    case Op_ShenandoahCompareAndSwapN:
+#endif
     case Op_WeakCompareAndSwapP:
     case Op_WeakCompareAndSwapN:
     case Op_CompareAndSwapP:
@@ -762,6 +772,14 @@ void ConnectionGraph::add_final_edges(Node *n) {
     case Op_CompareAndSwapN:
     case Op_WeakCompareAndSwapP:
     case Op_WeakCompareAndSwapN:
+#if INCLUDE_SHENANDOAHGC
+    case Op_ShenandoahCompareAndExchangeP:
+    case Op_ShenandoahCompareAndExchangeN:
+    case Op_ShenandoahCompareAndSwapP:
+    case Op_ShenandoahCompareAndSwapN:
+    case Op_ShenandoahWeakCompareAndSwapP:
+    case Op_ShenandoahWeakCompareAndSwapN:
+#endif
     case Op_GetAndSetP:
     case Op_GetAndSetN: {
       Node* adr = n->in(MemNode::Address);
@@ -775,6 +793,9 @@ void ConnectionGraph::add_final_edges(Node *n) {
       }
 #endif
       if (opcode == Op_GetAndSetP || opcode == Op_GetAndSetN ||
+#if INCLUDE_SHENANDOAHGC
+          opcode == Op_ShenandoahCompareAndExchangeN || opcode == Op_ShenandoahCompareAndExchangeP ||
+#endif
           opcode == Op_CompareAndExchangeN || opcode == Op_CompareAndExchangeP) {
         add_local_var_and_edge(n, PointsToNode::NoEscape, adr, NULL);
       }
@@ -1787,6 +1808,18 @@ void ConnectionGraph::adjust_scalar_replaceable_state(JavaObjectNode* jobj) {
     // access its field since the field value is unknown after it.
     //
     Node* n = field->ideal_node();
+
+    // Test for an unsafe access that was parsed as maybe off heap
+    // (with a CheckCastPP to raw memory).
+    assert(n->is_AddP(), "expect an address computation");
+    if (n->in(AddPNode::Base)->is_top() &&
+        n->in(AddPNode::Address)->Opcode() == Op_CheckCastPP) {
+      assert(n->in(AddPNode::Address)->bottom_type()->isa_rawptr(), "raw address so raw cast expected");
+      assert(_igvn->type(n->in(AddPNode::Address)->in(1))->isa_oopptr(), "cast pattern at unsafe access expected");
+      jobj->set_scalar_replaceable(false);
+      return;
+    }
+
     for (DUIterator_Fast imax, i = n->fast_outs(imax); i < imax; i++) {
       if (n->fast_out(i)->is_LoadStore()) {
         jobj->set_scalar_replaceable(false);
@@ -2133,6 +2166,10 @@ bool ConnectionGraph::is_oop_field(Node* n, int offset, bool* unsafe) {
         // Check for unsafe oop field access
         if (n->has_out_with(Op_StoreP, Op_LoadP, Op_StoreN, Op_LoadN) ||
             n->has_out_with(Op_GetAndSetP, Op_GetAndSetN, Op_CompareAndExchangeP, Op_CompareAndExchangeN) ||
+#if INCLUDE_SHENANDOAHGC
+            n->has_out_with(Op_ShenandoahCompareAndExchangeP) || n->has_out_with(Op_ShenandoahCompareAndExchangeN) ||
+            n->has_out_with(Op_ShenandoahCompareAndSwapP, Op_ShenandoahCompareAndSwapN, Op_ShenandoahWeakCompareAndSwapP, Op_ShenandoahWeakCompareAndSwapN) ||
+#endif
             n->has_out_with(Op_CompareAndSwapP, Op_CompareAndSwapN, Op_WeakCompareAndSwapP, Op_WeakCompareAndSwapN)) {
           bt = T_OBJECT;
           (*unsafe) = true;

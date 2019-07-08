@@ -97,7 +97,7 @@ enum LoopOptsMode {
   LoopOptsShenandoahExpand = 3,
   LoopOptsShenandoahPostExpand = 4,
   LoopOptsVerify = 5,
-  LoopOptsZgcLastRound = 6,
+  LoopOptsZgcLastRound = 6
 };
 
 typedef unsigned int node_idx_t;
@@ -1364,6 +1364,8 @@ class Compile : public Phase {
   // supporting clone_map
   CloneMap&     clone_map();
   void          set_clone_map(Dict* d);
+
+  bool is_compiling_clinit_for(ciKlass* k);
 };
 
 #endif // SHARE_VM_OPTO_COMPILE_HPP

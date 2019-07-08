@@ -42,7 +42,6 @@
 #define __ masm->
 
 address ShenandoahBarrierSetAssembler::_shenandoah_wb = NULL;
-address ShenandoahBarrierSetAssembler::_shenandoah_wb_C = NULL;
 
 void ShenandoahBarrierSetAssembler::arraycopy_prologue(MacroAssembler* masm, DecoratorSet decorators, BasicType type,
                                                        Register src, Register dst, Register count) {
@@ -67,26 +66,22 @@ void ShenandoahBarrierSetAssembler::arraycopy_prologue(MacroAssembler* masm, Dec
     }
 #endif
 
-    if (!dest_uninitialized && !ShenandoahHeap::heap()->heuristics()->can_do_traversal_gc()) {
+    if (ShenandoahSATBBarrier && !dest_uninitialized && !ShenandoahHeap::heap()->heuristics()->can_do_traversal_gc()) {
       Register thread = NOT_LP64(rax) LP64_ONLY(r15_thread);
 #ifndef _LP64
       __ push(thread);
       __ get_thread(thread);
 #endif
 
-      Label filtered;
-      Address in_progress(thread, in_bytes(ShenandoahThreadLocalData::satb_mark_queue_active_offset()));
-      // Is marking active?
-      if (in_bytes(SATBMarkQueue::byte_width_of_active()) == 4) {
-        __ cmpl(in_progress, 0);
-      } else {
-        assert(in_bytes(SATBMarkQueue::byte_width_of_active()) == 1, "Assumption");
-        __ cmpb(in_progress, 0);
-      }
+      Label done;
+      // Short-circuit if count == 0.
+      __ testptr(count, count);
+      __ jcc(Assembler::zero, done);
 
-      NOT_LP64(__ pop(thread);)
-
-        __ jcc(Assembler::equal, filtered);
+      // Avoid runtime call when not marking.
+      Address gc_state(thread, in_bytes(ShenandoahThreadLocalData::gc_state_offset()));
+      __ testb(gc_state, ShenandoahHeap::MARKING);
+      __ jcc(Assembler::zero, done);
 
       __ pusha();                      // push registers
 #ifdef _LP64
@@ -112,7 +107,8 @@ void ShenandoahBarrierSetAssembler::arraycopy_prologue(MacroAssembler* masm, Dec
                       dst, count);
 #endif
       __ popa();
-      __ bind(filtered);
+      __ bind(done);
+      NOT_LP64(__ pop(thread);)
     }
   }
 
@@ -142,6 +138,22 @@ void ShenandoahBarrierSetAssembler::arraycopy_epilogue(MacroAssembler* masm, Dec
     }
 #endif
 
+    Register thread = NOT_LP64(rax) LP64_ONLY(r15_thread);
+#ifndef _LP64
+    __ push(thread);
+    __ get_thread(thread);
+#endif
+
+    // Short-circuit if count == 0.
+    Label done;
+    __ testptr(count, count);
+    __ jcc(Assembler::zero, done);
+
+    // Skip runtime call if no forwarded objects.
+    Address gc_state(thread, in_bytes(ShenandoahThreadLocalData::gc_state_offset()));
+    __ testb(gc_state, ShenandoahHeap::UPDATEREFS);
+    __ jcc(Assembler::zero, done);
+
     __ pusha();             // push registers (overkill)
 #ifdef _LP64
     if (c_rarg0 == count) { // On win64 c_rarg0 == rcx
@@ -159,6 +171,9 @@ void ShenandoahBarrierSetAssembler::arraycopy_epilogue(MacroAssembler* masm, Dec
                     dst, count);
 #endif
     __ popa();
+
+    __ bind(done);
+    NOT_LP64(__ pop(thread);)
   }
 }
 
@@ -591,40 +606,20 @@ void ShenandoahBarrierSetAssembler::resolve_for_write(MacroAssembler* masm, Deco
 // Special Shenandoah CAS implementation that handles false negatives
 // due to concurrent evacuation.
 #ifndef _LP64
-void ShenandoahBarrierSetAssembler::cmpxchg_oop(MacroAssembler* masm, DecoratorSet decorators,
+void ShenandoahBarrierSetAssembler::cmpxchg_oop(MacroAssembler* masm,
                                                 Register res, Address addr, Register oldval, Register newval,
-                                                bool exchange, bool encode, Register tmp1, Register tmp2) {
+                                                bool exchange, Register tmp1, Register tmp2) {
   // Shenandoah has no 32-bit version for this.
   Unimplemented();
 }
 #else
-void ShenandoahBarrierSetAssembler::cmpxchg_oop(MacroAssembler* masm, DecoratorSet decorators,
+void ShenandoahBarrierSetAssembler::cmpxchg_oop(MacroAssembler* masm,
                                                 Register res, Address addr, Register oldval, Register newval,
-                                                bool exchange, bool encode, Register tmp1, Register tmp2) {
-
-  if (!ShenandoahCASBarrier) {
-    BarrierSetAssembler::cmpxchg_oop(masm, decorators, res, addr, oldval, newval, exchange, encode, tmp1, tmp2);
-    return;
-  }
-
+                                                bool exchange, Register tmp1, Register tmp2) {
   assert(ShenandoahCASBarrier, "Should only be used when CAS barrier is enabled");
   assert(oldval == rax, "must be in rax for implicit use in cmpxchg");
 
   Label retry, done;
-
-  // Apply storeval barrier to newval.
-  if (encode) {
-    storeval_barrier(masm, newval, tmp1);
-  }
-
-  if (UseCompressedOops) {
-    if (encode) {
-      __ encode_heap_oop(oldval);
-      __ mov(rscratch1, newval);
-      __ encode_heap_oop(rscratch1);
-      newval = rscratch1;
-    }
-  }
 
   // Remember oldval for retry logic below
   if (UseCompressedOops) {
@@ -703,12 +698,6 @@ void ShenandoahBarrierSetAssembler::cmpxchg_oop(MacroAssembler* masm, DecoratorS
   }
 }
 #endif // LP64
-
-void ShenandoahBarrierSetAssembler::xchg_oop(MacroAssembler* masm, DecoratorSet decorators,
-                                             Register obj, Address addr, Register tmp) {
-  storeval_barrier(masm, obj, tmp);
-  BarrierSetAssembler::xchg_oop(masm, decorators, obj, addr, tmp);
-}
 
 void ShenandoahBarrierSetAssembler::save_vector_registers(MacroAssembler* masm) {
   int num_xmm_regs = LP64_ONLY(16) NOT_LP64(8);
@@ -933,14 +922,9 @@ address ShenandoahBarrierSetAssembler::shenandoah_wb() {
   return _shenandoah_wb;
 }
 
-address ShenandoahBarrierSetAssembler::shenandoah_wb_C() {
-  assert(_shenandoah_wb_C != NULL, "need write barrier stub");
-  return _shenandoah_wb_C;
-}
-
 #define __ cgen->assembler()->
 
-address ShenandoahBarrierSetAssembler::generate_shenandoah_wb(StubCodeGenerator* cgen, bool c_abi, bool do_cset_test) {
+address ShenandoahBarrierSetAssembler::generate_shenandoah_wb(StubCodeGenerator* cgen) {
   __ align(CodeEntryAlignment);
   StubCodeMark mark(cgen, "StubRoutines", "shenandoah_wb");
   address start = __ pc();
@@ -952,80 +936,61 @@ address ShenandoahBarrierSetAssembler::generate_shenandoah_wb(StubCodeGenerator*
   // RAX always holds the src object ptr, except after the slow call and
   // the cmpxchg, then it holds the result.
   // R8 and RCX are used as temporary registers.
-  if (!c_abi) {
-    __ push(rdi);
-    __ push(r8);
-  }
+  __ push(rdi);
+  __ push(r8);
 
   // Check for object beeing in the collection set.
   // TODO: Can we use only 1 register here?
   // The source object arrives here in rax.
   // live: rax
   // live: rdi
-  if (!c_abi) {
-    __ mov(rdi, rax);
-  } else {
-    if (rax != c_rarg0) {
-      __ mov(rax, c_rarg0);
-    }
-  }
-  if (do_cset_test) {
-    __ shrptr(rdi, ShenandoahHeapRegion::region_size_bytes_shift_jint());
-    // live: r8
-    __ movptr(r8, (intptr_t) ShenandoahHeap::in_cset_fast_test_addr());
-    __ movbool(r8, Address(r8, rdi, Address::times_1));
-    // unlive: rdi
-    __ testbool(r8);
-    // unlive: r8
-    __ jccb(Assembler::notZero, not_done);
+  __ mov(rdi, rax);
+  __ shrptr(rdi, ShenandoahHeapRegion::region_size_bytes_shift_jint());
+  // live: r8
+  __ movptr(r8, (intptr_t) ShenandoahHeap::in_cset_fast_test_addr());
+  __ movbool(r8, Address(r8, rdi, Address::times_1));
+  // unlive: rdi
+  __ testbool(r8);
+  // unlive: r8
+  __ jccb(Assembler::notZero, not_done);
 
-    if (!c_abi) {
-      __ pop(r8);
-      __ pop(rdi);
-    }
-    __ ret(0);
+  __ pop(r8);
+  __ pop(rdi);
+  __ ret(0);
 
-    __ bind(not_done);
-  }
+  __ bind(not_done);
 
-  if (!c_abi) {
-    __ push(rcx);
-  }
-
-  if (!c_abi) {
-    __ push(rdx);
-    __ push(rdi);
-    __ push(rsi);
-    __ push(r8);
-    __ push(r9);
-    __ push(r10);
-    __ push(r11);
-    __ push(r12);
-    __ push(r13);
-    __ push(r14);
-    __ push(r15);
-  }
+  __ push(rcx);
+  __ push(rdx);
+  __ push(rdi);
+  __ push(rsi);
+  __ push(r8);
+  __ push(r9);
+  __ push(r10);
+  __ push(r11);
+  __ push(r12);
+  __ push(r13);
+  __ push(r14);
+  __ push(r15);
   save_vector_registers(cgen->assembler());
   __ movptr(rdi, rax);
   __ call_VM_leaf(CAST_FROM_FN_PTR(address, ShenandoahRuntime::write_barrier_JRT), rdi);
   restore_vector_registers(cgen->assembler());
-  if (!c_abi) {
-    __ pop(r15);
-    __ pop(r14);
-    __ pop(r13);
-    __ pop(r12);
-    __ pop(r11);
-    __ pop(r10);
-    __ pop(r9);
-    __ pop(r8);
-    __ pop(rsi);
-    __ pop(rdi);
-    __ pop(rdx);
+  __ pop(r15);
+  __ pop(r14);
+  __ pop(r13);
+  __ pop(r12);
+  __ pop(r11);
+  __ pop(r10);
+  __ pop(r9);
+  __ pop(r8);
+  __ pop(rsi);
+  __ pop(rdi);
+  __ pop(rdx);
+  __ pop(rcx);
 
-    __ pop(rcx);
-    __ pop(r8);
-    __ pop(rdi);
-  }
+  __ pop(r8);
+  __ pop(rdi);
   __ ret(0);
 #else
   ShouldNotReachHere();
@@ -1042,7 +1007,6 @@ void ShenandoahBarrierSetAssembler::barrier_stubs_init() {
     BufferBlob* bb = BufferBlob::create("shenandoah_barrier_stubs", stub_code_size);
     CodeBuffer buf(bb);
     StubCodeGenerator cgen(&buf);
-    _shenandoah_wb = generate_shenandoah_wb(&cgen, false, true);
-    _shenandoah_wb_C = generate_shenandoah_wb(&cgen, true, false);
+    _shenandoah_wb = generate_shenandoah_wb(&cgen);
   }
 }

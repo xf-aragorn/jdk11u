@@ -29,13 +29,16 @@
 #include "gc/shenandoah/shenandoahHeap.hpp"
 #include "gc/shenandoah/shenandoahSATBMarkQueueSet.hpp"
 
+class ShenandoahBarrierSetAssembler;
+
 class ShenandoahBarrierSet: public BarrierSet {
-private:
+public:
   enum ArrayCopyStoreValMode {
     NONE,
     READ_BARRIER,
     WRITE_BARRIER
   };
+private:
 
   static ShenandoahSATBMarkQueueSet _satb_mark_queue_set;
 
@@ -43,6 +46,8 @@ private:
 
 public:
   ShenandoahBarrierSet(ShenandoahHeap* heap);
+
+  static ShenandoahBarrierSetAssembler* assembler();
 
   inline static ShenandoahBarrierSet* barrier_set() {
     return barrier_set_cast<ShenandoahBarrierSet>(BarrierSet::barrier_set());
@@ -102,8 +107,6 @@ public:
   void enqueue(oop obj);
 
 private:
-  inline bool need_update_refs_barrier();
-
   template <class T, bool STOREVAL_WRITE_BARRIER>
   void write_ref_array_loop(HeapWord* start, size_t count);
 
@@ -134,7 +137,7 @@ private:
   bool arraycopy_loop(T* src, T* dst, size_t length, Klass* bound, bool disjoint);
 
   template <typename T, bool CHECKCAST, bool SATB, ShenandoahBarrierSet::ArrayCopyStoreValMode STOREVAL_MODE>
-  bool arraycopy_element(T* cur_src, T* cur_dst, Klass* bound, Thread* thread);
+  bool arraycopy_element(T* cur_src, T* cur_dst, Klass* bound, Thread* const thread, ShenandoahMarkingContext* const ctx);
 
 public:
   // Callbacks for runtime accesses.
@@ -219,7 +222,10 @@ public:
 
     template <typename T>
     static void oop_store_in_heap(T* addr, oop value) {
-      ShenandoahBarrierSet::barrier_set()->write_ref_field_pre_work(addr, value);
+      const bool keep_alive = (decorators & AS_NO_KEEPALIVE) == 0;
+      if (keep_alive) {
+        ShenandoahBarrierSet::barrier_set()->write_ref_field_pre_work(addr, value);
+      }
       Raw::oop_store(addr, value);
     }
 

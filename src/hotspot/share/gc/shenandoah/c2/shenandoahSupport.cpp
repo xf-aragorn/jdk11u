@@ -170,8 +170,10 @@ bool ShenandoahBarrierNode::needs_barrier_impl(PhaseGVN* phase, ShenandoahBarrie
       n->Opcode() == Op_LoadN ||
       n->Opcode() == Op_GetAndSetP ||
       n->Opcode() == Op_CompareAndExchangeP ||
+      n->Opcode() == Op_ShenandoahCompareAndExchangeP ||
       n->Opcode() == Op_GetAndSetN ||
-      n->Opcode() == Op_CompareAndExchangeN) {
+      n->Opcode() == Op_CompareAndExchangeN ||
+      n->Opcode() == Op_ShenandoahCompareAndExchangeN) {
     return true;
   }
   if (n->Opcode() == Op_DecodeN ||
@@ -3144,8 +3146,7 @@ void ShenandoahBarrierNode::verify_raw_mem(RootNode* root) {
   nodes.push(root);
   for (uint next = 0; next < nodes.size(); next++) {
     Node *n  = nodes.at(next);
-    if (n->Opcode() == Op_CallLeafNoFP &&
-        ShenandoahBarrierSetAssembler::is_shenandoah_wb_C_call(n->as_Call()->entry_point())) {
+    if (ShenandoahBarrierSetC2::is_shenandoah_wb_call(n)) {
       controls.push(n);
       if (trace) { tty->print("XXXXXX verifying"); n->dump(); }
       for (uint next2 = 0; next2 < controls.size(); next2++) {
@@ -3265,6 +3266,7 @@ const Type* ShenandoahEnqueueBarrierNode::Value(PhaseGVN* phase) const {
 int ShenandoahEnqueueBarrierNode::needed(Node* n) {
   if (n == NULL ||
       n->is_Allocate() ||
+      n->Opcode() == Op_ShenandoahEnqueueBarrier ||
       n->bottom_type() == TypePtr::NULL_PTR ||
       (n->bottom_type()->make_oopptr() != NULL && n->bottom_type()->make_oopptr()->const_oop() != NULL)) {
     return NotNeeded;

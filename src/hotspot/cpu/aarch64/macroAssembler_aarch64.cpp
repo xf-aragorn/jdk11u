@@ -2161,6 +2161,14 @@ void MacroAssembler::stop(const char* msg) {
   hlt(0);
 }
 
+void MacroAssembler::warn(const char* msg) {
+  pusha();
+  mov(c_rarg0, (address)msg);
+  mov(lr, CAST_FROM_FN_PTR(address, warning));
+  blrt(lr, 1, 0, MacroAssembler::ret_type_void);
+  popa();
+}
+
 void MacroAssembler::unimplemented(const char* what) {
   const char* buf = NULL;
   {
@@ -2398,14 +2406,6 @@ void MacroAssembler::compare_eq(Register rm, Register rn, enum operand_size size
   }
 }
 
-
-void MacroAssembler::cmpxchg_oop(Register addr, Register expected, Register new_val,
-                                 bool acquire, bool release, bool weak, bool encode,
-                                 Register tmp1, Register tmp2,
-                                 Register tmp3, Register result) {
-  BarrierSetAssembler* bsa = BarrierSet::barrier_set()->barrier_set_assembler();
-  bsa->cmpxchg_oop(this, addr, expected, new_val, acquire, release, weak, encode, tmp1, tmp2, tmp3, result);
-}
 
 static bool different(Register a, RegisterOrConstant b, Register c) {
   if (b.is_constant())

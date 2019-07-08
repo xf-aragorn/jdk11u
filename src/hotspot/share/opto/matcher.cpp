@@ -1005,9 +1005,6 @@ Node *Matcher::xform( Node *n, int max_stack ) {
             m = n->is_SafePoint() ? match_sfpt(n->as_SafePoint()):match_tree(n);
             if (C->failing())  return NULL;
             if (m == NULL) { Matcher::soft_match_failure(); return NULL; }
-            if (n->is_MemBar()) {
-              m->as_MachMemBar()->set_adr_type(n->adr_type());
-            }
           } else {                  // Nothing the matcher cares about
             if (n->is_Proj() && n->in(0) != NULL && n->in(0)->is_Multi()) {       // Projections?
               // Convert to machine-dependent projection
@@ -2266,6 +2263,14 @@ void Matcher::find_shared( Node *n ) {
       case Op_StorePConditional:
       case Op_StoreIConditional:
       case Op_StoreLConditional:
+#if INCLUDE_SHENANDOAHGC
+      case Op_ShenandoahCompareAndExchangeP:
+      case Op_ShenandoahCompareAndExchangeN:
+      case Op_ShenandoahWeakCompareAndSwapP:
+      case Op_ShenandoahWeakCompareAndSwapN:
+      case Op_ShenandoahCompareAndSwapP:
+      case Op_ShenandoahCompareAndSwapN:
+#endif
       case Op_CompareAndExchangeB:
       case Op_CompareAndExchangeS:
       case Op_CompareAndExchangeI:
@@ -2509,6 +2514,14 @@ bool Matcher::post_store_load_barrier(const Node* vmb) {
     // that a monitor exit operation contains a serializing instruction.
 
     if (xop == Op_MemBarVolatile ||
+#if INCLUDE_SHENANDOAHGC
+        xop == Op_ShenandoahCompareAndExchangeP ||
+        xop == Op_ShenandoahCompareAndExchangeN ||
+        xop == Op_ShenandoahWeakCompareAndSwapP ||
+        xop == Op_ShenandoahWeakCompareAndSwapN ||
+        xop == Op_ShenandoahCompareAndSwapN ||
+        xop == Op_ShenandoahCompareAndSwapP ||
+#endif
         xop == Op_CompareAndExchangeB ||
         xop == Op_CompareAndExchangeS ||
         xop == Op_CompareAndExchangeI ||

@@ -1572,11 +1572,17 @@ void LIR_Assembler::emit_compare_and_swap(LIR_OpCompareAndSwap* op) {
   Label succeed, fail, around;
 
   if (op->code() == lir_cas_obj) {
-    assert(op->tmp1()->is_valid(), "must be");
-    assert(op->tmp1()->is_register(), "tmp1 must be register");
-    Register t1 = op->tmp1()->as_register();
-    Register t2 = op->tmp2()->as_register();
-    __ cmpxchg_oop(addr, cmpval, newval, /*acquire*/ false, /*release*/ true, /*weak*/ false, true, t1, t2);
+    if (UseCompressedOops) {
+      Register t1 = op->tmp1()->as_register();
+      assert(op->tmp1()->is_valid(), "must be");
+      __ encode_heap_oop(t1, cmpval);
+      cmpval = t1;
+      __ encode_heap_oop(rscratch2, newval);
+      newval = rscratch2;
+      casw(addr, newval, cmpval);
+    } else {
+      casl(addr, newval, cmpval);
+    }
   } else if (op->code() == lir_cas_int) {
     casw(addr, newval, cmpval);
   } else {
@@ -2211,7 +2217,7 @@ void LIR_Assembler::emit_arraycopy(LIR_OpArrayCopy* op) {
     __ ldr(src,              Address(sp, 4*BytesPerWord));
 
     // r0 is -1^K where K == partial copied count
-    __ eonw(rscratch1, r0, 0);
+    __ eonw(rscratch1, r0, zr);
     // adjust length down and src/end pos up by partial copied count
     __ subw(length, length, rscratch1);
     __ addw(src_pos, src_pos, rscratch1);
