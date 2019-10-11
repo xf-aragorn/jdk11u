@@ -109,6 +109,7 @@ ifneq ($(call check-jvm-feature, cds), true)
       classListParser.cpp \
       classLoaderExt.cpp \
       filemap.cpp \
+      heapShared.cpp \
       metaspaceShared.cpp \
       metaspaceShared_$(HOTSPOT_TARGET_CPU).cpp \
       metaspaceShared_$(HOTSPOT_TARGET_CPU_ARCH).cpp \
@@ -168,8 +169,6 @@ endif
 ifneq ($(call check-jvm-feature, shenandoahgc), true)
   JVM_CFLAGS_FEATURES += -DINCLUDE_SHENANDOAHGC=0
   JVM_EXCLUDE_PATTERNS += gc/shenandoah
-else
-  JVM_CFLAGS_FEATURES += -DSUPPORT_BARRIER_ON_PRIMITIVES -DSUPPORT_NOT_TO_SPACE_INVARIANT
 endif
 
 ifneq ($(call check-jvm-feature, jfr), true)

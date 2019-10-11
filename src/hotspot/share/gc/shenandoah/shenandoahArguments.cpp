@@ -35,7 +35,7 @@ void ShenandoahArguments::initialize() {
   vm_exit_during_initialization("Shenandoah GC is not supported on this platform.");
 #endif
 
-#ifdef IA32
+#if 0 // leave this block as stepping stone for future platforms
   log_warning(gc)("Shenandoah GC is not fully supported on this platform:");
   log_warning(gc)("  concurrent modes are not supported, only STW cycles are enabled;");
   log_warning(gc)("  arch-specific barrier code is not implemented, disabling barriers;");
@@ -43,14 +43,13 @@ void ShenandoahArguments::initialize() {
   FLAG_SET_DEFAULT(ShenandoahGCHeuristics,           "passive");
 
   FLAG_SET_DEFAULT(ShenandoahSATBBarrier,            false);
+  FLAG_SET_DEFAULT(ShenandoahLoadRefBarrier,         false);
   FLAG_SET_DEFAULT(ShenandoahKeepAliveBarrier,       false);
-  FLAG_SET_DEFAULT(ShenandoahWriteBarrier,           false);
-  FLAG_SET_DEFAULT(ShenandoahReadBarrier,            false);
   FLAG_SET_DEFAULT(ShenandoahStoreValEnqueueBarrier, false);
-  FLAG_SET_DEFAULT(ShenandoahStoreValReadBarrier,    false);
   FLAG_SET_DEFAULT(ShenandoahCASBarrier,             false);
-  FLAG_SET_DEFAULT(ShenandoahAcmpBarrier,            false);
   FLAG_SET_DEFAULT(ShenandoahCloneBarrier,           false);
+
+  FLAG_SET_DEFAULT(ShenandoahVerifyOptoBarriers,     false);
 #endif
 
   if (UseLargePages && (MaxHeapSize / os::large_page_size()) < ShenandoahHeapRegion::MIN_NUM_REGIONS) {
@@ -60,19 +59,39 @@ void ShenandoahArguments::initialize() {
   }
 
   // Enable NUMA by default. While Shenandoah is not NUMA-aware, enabling NUMA makes
-  // storage allocation code NUMA-aware, and NUMA interleaving makes the storage
-  // allocated in consistent manner (interleaving) to minimize run-to-run variance.
+  // storage allocation code NUMA-aware.
   if (FLAG_IS_DEFAULT(UseNUMA)) {
     FLAG_SET_DEFAULT(UseNUMA, true);
-    FLAG_SET_DEFAULT(UseNUMAInterleaving, true);
   }
 
-  FLAG_SET_DEFAULT(ParallelGCThreads,
-                   Abstract_VM_Version::parallel_worker_threads());
-
+  // Set up default number of concurrent threads. We want to have cycles complete fast
+  // enough, but we also do not want to steal too much CPU from the concurrently running
+  // application. Using 1/4 of available threads for concurrent GC seems a good
+  // compromise here.
   if (FLAG_IS_DEFAULT(ConcGCThreads)) {
-    uint conc_threads = MAX2((uint) 1, ParallelGCThreads);
-    FLAG_SET_DEFAULT(ConcGCThreads, conc_threads);
+    FLAG_SET_DEFAULT(ConcGCThreads, MAX2(1, os::processor_count() / 4));
+  }
+
+  if (ConcGCThreads == 0) {
+    vm_exit_during_initialization("Shenandoah expects ConcGCThreads > 0, check -XX:ConcGCThreads=#");
+  }
+
+  // Set up default number of parallel threads. We want to have decent pauses performance
+  // which would use parallel threads, but we also do not want to do too many threads
+  // that will overwhelm the OS scheduler. Using 1/2 of available threads seems to be a fair
+  // compromise here. Due to implementation constraints, it should not be lower than
+  // the number of concurrent threads.
+  if (FLAG_IS_DEFAULT(ParallelGCThreads)) {
+    FLAG_SET_DEFAULT(ParallelGCThreads, MAX2(1, os::processor_count() / 2));
+  }
+
+  if (ParallelGCThreads == 0) {
+    vm_exit_during_initialization("Shenandoah expects ParallelGCThreads > 0, check -XX:ParallelGCThreads=#");
+  }
+
+  if (ParallelGCThreads < ConcGCThreads) {
+    warning("Shenandoah expects ConcGCThreads <= ParallelGCThreads, adjusting ParallelGCThreads automatically");
+    FLAG_SET_DEFAULT(ParallelGCThreads, ConcGCThreads);
   }
 
   if (FLAG_IS_DEFAULT(ParallelRefProcEnabled)) {
@@ -97,13 +116,10 @@ void ShenandoahArguments::initialize() {
   // C2 barrier verification is only reliable when all default barriers are enabled
   if (ShenandoahVerifyOptoBarriers &&
           (!FLAG_IS_DEFAULT(ShenandoahSATBBarrier)            ||
+           !FLAG_IS_DEFAULT(ShenandoahLoadRefBarrier)         ||
            !FLAG_IS_DEFAULT(ShenandoahKeepAliveBarrier)       ||
-           !FLAG_IS_DEFAULT(ShenandoahWriteBarrier)           ||
-           !FLAG_IS_DEFAULT(ShenandoahReadBarrier)            ||
            !FLAG_IS_DEFAULT(ShenandoahStoreValEnqueueBarrier) ||
-           !FLAG_IS_DEFAULT(ShenandoahStoreValReadBarrier)    ||
            !FLAG_IS_DEFAULT(ShenandoahCASBarrier)             ||
-           !FLAG_IS_DEFAULT(ShenandoahAcmpBarrier)            ||
            !FLAG_IS_DEFAULT(ShenandoahCloneBarrier)
           )) {
     warning("Unusual barrier configuration, disabling C2 barrier verification");
@@ -167,13 +183,6 @@ void ShenandoahArguments::initialize() {
     }
     FLAG_SET_DEFAULT(UseAOT, false);
   }
-
-  // JNI fast get field stuff is not currently supported by Shenandoah.
-  // It would introduce another heap memory access for reading the forwarding
-  // pointer, which would have to be guarded by the signal handler machinery.
-  // See:
-  // http://mail.openjdk.java.net/pipermail/hotspot-dev/2018-June/032763.html
-  FLAG_SET_DEFAULT(UseFastJNIAccessors, false);
 
   // TLAB sizing policy makes resizing decisions before each GC cycle. It averages
   // historical data, assigning more recent data the weight according to TLABAllocationWeight.

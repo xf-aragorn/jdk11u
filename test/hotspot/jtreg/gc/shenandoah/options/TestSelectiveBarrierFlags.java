@@ -43,13 +43,9 @@ public class TestSelectiveBarrierFlags {
     public static void main(String[] args) throws Exception {
         String[][] opts = {
                 new String[] { "ShenandoahKeepAliveBarrier" },
-                new String[] { "ShenandoahWriteBarrier" },
-                new String[] { "ShenandoahReadBarrier" },
-                // StoreValRead+SATB are actually compatible, but we need to protect against
-                // StorveValEnqueue+SATB. TODO: Make it better.
-                new String[] { "ShenandoahSATBBarrier", "ShenandoahStoreValReadBarrier", "ShenandoahStoreValEnqueueBarrier" },
+                new String[] { "ShenandoahLoadRefBarrier" },
+                new String[] { "ShenandoahSATBBarrier", "ShenandoahStoreValEnqueueBarrier" },
                 new String[] { "ShenandoahCASBarrier" },
-                new String[] { "ShenandoahAcmpBarrier" },
                 new String[] { "ShenandoahCloneBarrier" },
         };
 
@@ -69,7 +65,7 @@ public class TestSelectiveBarrierFlags {
             conf.add("-XX:+UnlockDiagnosticVMOptions");
             conf.add("-XX:+UnlockExperimentalVMOptions");
             conf.add("-XX:+UseShenandoahGC");
-            conf.add("-XX:ShenandoahGCHeuristics=passive");
+            conf.add("-XX:ShenandoahGCMode=passive");
 
             StringBuilder sb = new StringBuilder();
             for (String[] l : opts) {

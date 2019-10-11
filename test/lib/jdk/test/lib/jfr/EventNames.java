@@ -98,6 +98,8 @@ public class EventNames {
     public final static String G1HeapSummary = PREFIX + "G1HeapSummary";
     public final static String G1HeapRegionInformation = PREFIX + "G1HeapRegionInformation";
     public final static String G1HeapRegionTypeChange = PREFIX + "G1HeapRegionTypeChange";
+    public final static String ShenandoahHeapRegionInformation = PREFIX + "ShenandoahHeapRegionInformation";
+    public final static String ShenandoahHeapRegionStateChange = PREFIX + "ShenandoahHeapRegionStateChange";
     public final static String TenuringDistribution = PREFIX + "TenuringDistribution";
     public final static String GarbageCollection = PREFIX + "GarbageCollection";
     public final static String ParallelOldCollection = PREFIX + "ParallelOldGarbageCollection";
@@ -168,6 +170,10 @@ public class EventNames {
     public final static String JavaErrorThrow = PREFIX + "JavaErrorThrow";
     public final static String ModuleRequire = PREFIX + "ModuleRequire";
     public final static String ModuleExport = PREFIX + "ModuleExport";
+    public final static String TLSHandshake = PREFIX + "TLSHandshake";
+    public final static String X509Certificate = PREFIX + "X509Certificate";
+    public final static String X509Validation = PREFIX + "X509Validation";
+    public final static String SecurityProperty = PREFIX + "SecurityPropertyModification";
 
     // Flight Recorder
     public final static String DumpReason = PREFIX + "DumpReason";

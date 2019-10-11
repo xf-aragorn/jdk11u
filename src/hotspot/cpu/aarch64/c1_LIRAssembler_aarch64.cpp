@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2000, 2018, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2014, 2018, Red Hat, Inc. All rights reserved.
+ * Copyright (c) 2014, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,6 +34,7 @@
 #include "c1/c1_ValueStack.hpp"
 #include "ci/ciArrayKlass.hpp"
 #include "ci/ciInstance.hpp"
+#include "code/compiledIC.hpp"
 #include "gc/shared/barrierSet.hpp"
 #include "gc/shared/cardTableBarrierSet.hpp"
 #include "gc/shared/collectedHeap.hpp"
@@ -2012,11 +2013,10 @@ void LIR_Assembler::emit_static_call_stub() {
   int start = __ offset();
 
   __ relocate(static_stub_Relocation::spec(call_pc));
-  __ mov_metadata(rmethod, (Metadata*)NULL);
-  __ movptr(rscratch1, 0);
-  __ br(rscratch1);
+  __ emit_static_call_stub();
 
-  assert(__ offset() - start <= call_stub_size(), "stub too big");
+  assert(__ offset() - start + CompiledStaticCall::to_trampoline_stub_size()
+        <= call_stub_size(), "stub too big");
   __ end_a_stub();
 }
 
@@ -2166,9 +2166,6 @@ void LIR_Assembler::emit_arraycopy(LIR_OpArrayCopy* op) {
   Register dst_pos = op->dst_pos()->as_register();
   Register length  = op->length()->as_register();
   Register tmp = op->tmp()->as_register();
-
-  __ resolve_for_read(IN_HEAP, src);
-  __ resolve_for_write(IN_HEAP, dst);
 
   CodeStub* stub = op->stub();
   int flags = op->flags();
@@ -2513,7 +2510,6 @@ void LIR_Assembler::emit_lock(LIR_OpLock* op) {
       scratch = op->scratch_opr()->as_register();
     }
     assert(BasicLock::displaced_header_offset_in_bytes() == 0, "lock_reg must point to the displaced header");
-    __ resolve_for_write(IN_HEAP, obj);
     // add debug info for NullPointerException only if one is possible
     int null_check_offset = __ lock_object(hdr, obj, lock, scratch, *op->stub()->entry());
     if (op->info() != NULL) {
@@ -2828,40 +2824,7 @@ void LIR_Assembler::rt_call(LIR_Opr result, address dest, const LIR_OprList* arg
     __ far_call(RuntimeAddress(dest));
   } else {
     __ mov(rscratch1, RuntimeAddress(dest));
-    int len = args->length();
-    int type = 0;
-    if (! result->is_illegal()) {
-      switch (result->type()) {
-      case T_VOID:
-        type = 0;
-        break;
-      case T_INT:
-      case T_LONG:
-      case T_OBJECT:
-        type = 1;
-        break;
-      case T_FLOAT:
-        type = 2;
-        break;
-      case T_DOUBLE:
-        type = 3;
-        break;
-      default:
-        ShouldNotReachHere();
-        break;
-      }
-    }
-    int num_gpargs = 0;
-    int num_fpargs = 0;
-    for (int i = 0; i < args->length(); i++) {
-      LIR_Opr arg = args->at(i);
-      if (arg->type() == T_FLOAT || arg->type() == T_DOUBLE) {
-        num_fpargs++;
-      } else {
-        num_gpargs++;
-      }
-    }
-    __ blrt(rscratch1, num_gpargs, num_fpargs, type);
+    __ blr(rscratch1);
   }
 
   if (info != NULL) {

@@ -162,15 +162,16 @@ public:
 
 class ShenandoahInitTraversalCollectionTask : public AbstractGangTask {
 private:
-  ShenandoahRootProcessor* _rp;
+  ShenandoahCSetRootScanner* _rp;
   ShenandoahHeap* _heap;
   ShenandoahCsetCodeRootsIterator* _cset_coderoots;
+  ShenandoahStringDedupRoots       _dedup_roots;
+
 public:
-  ShenandoahInitTraversalCollectionTask(ShenandoahRootProcessor* rp, ShenandoahCsetCodeRootsIterator* cset_coderoots) :
+  ShenandoahInitTraversalCollectionTask(ShenandoahCSetRootScanner* rp) :
     AbstractGangTask("Shenandoah Init Traversal Collection"),
     _rp(rp),
-    _heap(ShenandoahHeap::heap()),
-    _cset_coderoots(cset_coderoots) {}
+    _heap(ShenandoahHeap::heap()) {}
 
   void work(uint worker_id) {
     ShenandoahParallelWorkerSession worker_session(worker_id);
@@ -192,18 +193,13 @@ public:
       ShenandoahMarkCLDClosure cld_cl(&roots_cl);
       MarkingCodeBlobClosure code_cl(&roots_cl, CodeBlobToOopClosure::FixRelocations);
       if (unload_classes) {
-        _rp->process_strong_roots(&roots_cl, &cld_cl, NULL, NULL, worker_id);
-        // Need to pre-evac code roots here. Otherwise we might see from-space constants.
-        ShenandoahWorkerTimings* worker_times = _heap->phase_timings()->worker_times();
-        ShenandoahWorkerTimingsTracker timer(worker_times, ShenandoahPhaseTimings::CodeCacheRoots, worker_id);
-        _cset_coderoots->possibly_parallel_blobs_do(&code_cl);
+        _rp->roots_do(worker_id, &roots_cl, NULL, &code_cl);
       } else {
-        _rp->process_all_roots(&roots_cl, &cld_cl, &code_cl, NULL, worker_id);
+        _rp->roots_do(worker_id, &roots_cl, &cld_cl, &code_cl);
       }
-      if (ShenandoahStringDedup::is_enabled()) {
-        AlwaysTrueClosure is_alive;
-        ShenandoahStringDedup::parallel_oops_do(&is_alive, &roots_cl, worker_id);
-      }
+
+      AlwaysTrueClosure is_alive;
+      _dedup_roots.oops_do(&is_alive, &roots_cl, worker_id);
     }
   }
 };
@@ -231,11 +227,11 @@ public:
 
 class ShenandoahFinalTraversalCollectionTask : public AbstractGangTask {
 private:
-  ShenandoahRootProcessor* _rp;
+  ShenandoahAllRootScanner* _rp;
   ShenandoahTaskTerminator* _terminator;
   ShenandoahHeap* _heap;
 public:
-  ShenandoahFinalTraversalCollectionTask(ShenandoahRootProcessor* rp, ShenandoahTaskTerminator* terminator) :
+  ShenandoahFinalTraversalCollectionTask(ShenandoahAllRootScanner* rp, ShenandoahTaskTerminator* terminator) :
     AbstractGangTask("Shenandoah Final Traversal Collection"),
     _rp(rp),
     _terminator(terminator),
@@ -274,23 +270,23 @@ public:
     // roots here.
     if (!_heap->is_degenerated_gc_in_progress()) {
       ShenandoahTraversalClosure roots_cl(q, rp);
-      CLDToOopClosure cld_cl(&roots_cl);
       ShenandoahTraversalSATBThreadsClosure tc(&satb_cl);
       if (unload_classes) {
         ShenandoahRemarkCLDClosure remark_cld_cl(&roots_cl);
-        _rp->process_strong_roots(&roots_cl, &remark_cld_cl, NULL, &tc, worker_id);
+        _rp->strong_roots_do(worker_id, &roots_cl, &remark_cld_cl, NULL, &tc);
       } else {
-        _rp->process_all_roots(&roots_cl, &cld_cl, NULL, &tc, worker_id);
+        CLDToOopClosure cld_cl(&roots_cl);
+        _rp->roots_do(worker_id, &roots_cl, &cld_cl, NULL, &tc);
       }
     } else {
       ShenandoahTraversalDegenClosure roots_cl(q, rp);
-      CLDToOopClosure cld_cl(&roots_cl);
       ShenandoahTraversalSATBThreadsClosure tc(&satb_cl);
       if (unload_classes) {
         ShenandoahRemarkCLDClosure remark_cld_cl(&roots_cl);
-        _rp->process_strong_roots(&roots_cl, &remark_cld_cl, NULL, &tc, worker_id);
+        _rp->strong_roots_do(worker_id, &roots_cl, &remark_cld_cl, NULL, &tc);
       } else {
-        _rp->process_all_roots(&roots_cl, &cld_cl, NULL, &tc, worker_id);
+        CLDToOopClosure cld_cl(&roots_cl);
+        _rp->roots_do(worker_id, &roots_cl, &cld_cl, NULL, &tc);
       }
     }
 
@@ -309,6 +305,9 @@ ShenandoahTraversalGC::ShenandoahTraversalGC(ShenandoahHeap* heap, size_t num_re
   _heap(heap),
   _task_queues(new ShenandoahObjToScanQueueSet(heap->max_workers())),
   _traversal_set(ShenandoahHeapRegionSet()) {
+
+  // Traversal does not support concurrent code root scanning
+  FLAG_SET_DEFAULT(ShenandoahConcurrentScanCodeRoots, false);
 
   uint num_queues = heap->max_workers();
   for (uint i = 0; i < num_queues; ++i) {
@@ -410,22 +409,19 @@ void ShenandoahTraversalGC::init_traversal_collection() {
     assert(_task_queues->is_empty(), "queues must be empty before traversal GC");
     TASKQUEUE_STATS_ONLY(_task_queues->reset_taskqueue_stats());
 
-#if defined(COMPILER2) || INCLUDE_JVMCI
+#if COMPILER2_OR_JVMCI
     DerivedPointerTable::clear();
 #endif
 
     {
       uint nworkers = _heap->workers()->active_workers();
       task_queues()->reserve(nworkers);
-      ShenandoahRootProcessor rp(_heap, nworkers, ShenandoahPhaseTimings::init_traversal_gc_work);
-
-      ShenandoahCsetCodeRootsIterator cset_coderoots = ShenandoahCodeRoots::cset_iterator();
-
-      ShenandoahInitTraversalCollectionTask traversal_task(&rp, &cset_coderoots);
+      ShenandoahCSetRootScanner rp(nworkers, ShenandoahPhaseTimings::init_traversal_gc_work);
+      ShenandoahInitTraversalCollectionTask traversal_task(&rp);
       _heap->workers()->run_task(&traversal_task);
     }
 
-#if defined(COMPILER2) || INCLUDE_JVMCI
+#if COMPILER2_OR_JVMCI
     DerivedPointerTable::update_pointers();
 #endif
   }
@@ -584,7 +580,7 @@ void ShenandoahTraversalGC::final_traversal_collection() {
   _heap->make_parsable(true);
 
   if (!_heap->cancelled_gc()) {
-#if defined(COMPILER2) || INCLUDE_JVMCI
+#if COMPILER2_OR_JVMCI
     DerivedPointerTable::clear();
 #endif
     ShenandoahGCPhase phase_work(ShenandoahPhaseTimings::final_traversal_gc_work);
@@ -592,13 +588,13 @@ void ShenandoahTraversalGC::final_traversal_collection() {
     task_queues()->reserve(nworkers);
 
     // Finish traversal
-    ShenandoahRootProcessor rp(_heap, nworkers, ShenandoahPhaseTimings::final_traversal_gc_work);
+    ShenandoahAllRootScanner rp(nworkers, ShenandoahPhaseTimings::final_traversal_gc_work);
     ShenandoahTerminationTracker term(ShenandoahPhaseTimings::final_traversal_gc_termination);
 
     ShenandoahTaskTerminator terminator(nworkers, task_queues());
     ShenandoahFinalTraversalCollectionTask task(&rp, &terminator);
     _heap->workers()->run_task(&task);
-#if defined(COMPILER2) || INCLUDE_JVMCI
+#if COMPILER2_OR_JVMCI
     DerivedPointerTable::update_pointers();
 #endif
   }
@@ -611,6 +607,9 @@ void ShenandoahTraversalGC::final_traversal_collection() {
     fixup_roots();
     if (_heap->unload_classes()) {
       _heap->unload_classes_and_cleanup_tables(false);
+    } else {
+      ShenandoahIsAliveSelector alive;
+      StringTable::unlink(alive.is_alive_closure());
     }
   }
 
@@ -645,7 +644,7 @@ void ShenandoahTraversalGC::final_traversal_collection() {
         bool candidate = traversal_regions->is_in(r) && !r->has_live() && not_allocated;
         if (r->is_humongous_start() && candidate) {
           // Trash humongous.
-          HeapWord* humongous_obj = r->bottom() + ShenandoahBrooksPointer::word_size();
+          HeapWord* humongous_obj = r->bottom();
           assert(!ctx->is_marked(oop(humongous_obj)), "must not be marked");
           r->make_trash_immediate();
           while (i + 1 < num_regions && _heap->get_region(i + 1)->is_humongous_continuation()) {
@@ -688,7 +687,7 @@ private:
     if (!CompressedOops::is_null(o)) {
       oop obj = CompressedOops::decode_not_null(o);
       oop forw = ShenandoahBarrierSet::resolve_forwarded_not_null(obj);
-      if (!oopDesc::unsafe_equals(obj, forw)) {
+      if (obj != forw) {
         RawAccess<IS_NOT_NULL>::oop_store(p, forw);
       }
     }
@@ -701,10 +700,10 @@ public:
 
 class ShenandoahTraversalFixRootsTask : public AbstractGangTask {
 private:
-  ShenandoahRootProcessor* _rp;
+  ShenandoahRootUpdater* _rp;
 
 public:
-  ShenandoahTraversalFixRootsTask(ShenandoahRootProcessor* rp) :
+  ShenandoahTraversalFixRootsTask(ShenandoahRootUpdater* rp) :
     AbstractGangTask("Shenandoah traversal fix roots"),
     _rp(rp) {
     assert(ShenandoahHeap::heap()->has_forwarded_objects(), "Must be");
@@ -713,20 +712,19 @@ public:
   void work(uint worker_id) {
     ShenandoahParallelWorkerSession worker_session(worker_id);
     ShenandoahTraversalFixRootsClosure cl;
-    MarkingCodeBlobClosure blobsCl(&cl, CodeBlobToOopClosure::FixRelocations);
-    CLDToOopClosure cldCl(&cl);
-    _rp->update_all_roots<ShenandoahForwardedIsAliveClosure>(&cl, &cldCl, &blobsCl, NULL, worker_id);
+    ShenandoahForwardedIsAliveClosure is_alive;
+    _rp->roots_do<ShenandoahForwardedIsAliveClosure, ShenandoahTraversalFixRootsClosure>(worker_id, &is_alive, &cl);
   }
 };
 
 void ShenandoahTraversalGC::fixup_roots() {
-#if defined(COMPILER2) || INCLUDE_JVMCI
+#if COMPILER2_OR_JVMCI
   DerivedPointerTable::clear();
 #endif
-  ShenandoahRootProcessor rp(_heap, _heap->workers()->active_workers(), ShenandoahPhaseTimings::final_traversal_update_roots);
+  ShenandoahRootUpdater rp(_heap->workers()->active_workers(), ShenandoahPhaseTimings::final_traversal_update_roots, true /* update code cache */);
   ShenandoahTraversalFixRootsTask update_roots_task(&rp);
   _heap->workers()->run_task(&update_roots_task);
-#if defined(COMPILER2) || INCLUDE_JVMCI
+#if COMPILER2_OR_JVMCI
   DerivedPointerTable::update_pointers();
 #endif
 }

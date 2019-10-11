@@ -555,7 +555,7 @@ public:
 
   // Return TRUE or FALSE if the loop should be unswitched -- clone
   // loop with an invariant test
-  bool policy_unswitching(PhaseIdealLoop *phase, bool shenandoah_opts = false) const;
+  bool policy_unswitching( PhaseIdealLoop *phase ) const;
 
   // Micro-benchmark spamming.  Remove empty loops.
   bool policy_do_remove_empty_loop( PhaseIdealLoop *phase );
@@ -1172,10 +1172,10 @@ public:
   // Clone loop with an invariant test (that does not exit) and
   // insert a clone of the test that selects which version to
   // execute.
-  void do_unswitching(IdealLoopTree *loop, Node_List &old_new, bool shenandoah_opts = false);
+  void do_unswitching (IdealLoopTree *loop, Node_List &old_new);
 
   // Find candidate "if" for unswitching
-  IfNode* find_unswitching_candidate(const IdealLoopTree *loop, bool shenandoah_opts) const;
+  IfNode* find_unswitching_candidate(const IdealLoopTree *loop) const;
 
   // Range Check Elimination uses this function!
   // Constrain the main loop iterations so the affine function:
@@ -1185,7 +1185,7 @@ public:
   // loop.  Scale_con, offset and limit are all loop invariant.
   void add_constraint( int stride_con, int scale_con, Node *offset, Node *low_limit, Node *upper_limit, Node *pre_ctrl, Node **pre_limit, Node **main_limit );
   // Helper function for add_constraint().
-  Node* adjust_limit( int stride_con, Node * scale, Node *offset, Node *rc_limit, Node *loop_limit, Node *pre_ctrl );
+  Node* adjust_limit(int stride_con, Node * scale, Node *offset, Node *rc_limit, Node *loop_limit, Node *pre_ctrl, bool round_up);
 
   // Partially peel loop up through last_peel node.
   bool partial_peel( IdealLoopTree *loop, Node_List &old_new );
@@ -1267,8 +1267,6 @@ public:
   Node *split_thru_region( Node *n, Node *region );
   // Split Node 'n' through merge point if there is enough win.
   Node *split_thru_phi( Node *n, Node *region, int policy );
-  void split_mem_thru_phi(Node*, Node* r, Node* phi);
-
   // Found an If getting its condition-code input from a Phi in the
   // same block.  Split thru the Region.
   void do_split_if( Node *iff );

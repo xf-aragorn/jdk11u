@@ -40,19 +40,16 @@ ShenandoahStaticHeuristics::ShenandoahStaticHeuristics() : ShenandoahHeuristics(
   SHENANDOAH_ERGO_ENABLE_FLAG(ShenandoahImplicitGCInvokesConcurrent);
 
   // Final configuration checks
+  SHENANDOAH_CHECK_FLAG_SET(ShenandoahLoadRefBarrier);
   SHENANDOAH_CHECK_FLAG_SET(ShenandoahSATBBarrier);
-  SHENANDOAH_CHECK_FLAG_SET(ShenandoahReadBarrier);
-  SHENANDOAH_CHECK_FLAG_SET(ShenandoahWriteBarrier);
-  SHENANDOAH_CHECK_FLAG_SET(ShenandoahStoreValReadBarrier);
   SHENANDOAH_CHECK_FLAG_SET(ShenandoahKeepAliveBarrier);
   SHENANDOAH_CHECK_FLAG_SET(ShenandoahCASBarrier);
-  SHENANDOAH_CHECK_FLAG_SET(ShenandoahAcmpBarrier);
   SHENANDOAH_CHECK_FLAG_SET(ShenandoahCloneBarrier);
 }
 
 ShenandoahStaticHeuristics::~ShenandoahStaticHeuristics() {}
 
-bool ShenandoahStaticHeuristics::should_start_normal_gc() const {
+bool ShenandoahStaticHeuristics::should_start_gc() const {
   ShenandoahHeap* heap = ShenandoahHeap::heap();
 
   size_t capacity = heap->max_capacity();
@@ -64,7 +61,7 @@ bool ShenandoahStaticHeuristics::should_start_normal_gc() const {
                  available / M, threshold_available / M);
     return true;
   }
-  return ShenandoahHeuristics::should_start_normal_gc();
+  return ShenandoahHeuristics::should_start_gc();
 }
 
 void ShenandoahStaticHeuristics::choose_collection_set_from_regiondata(ShenandoahCollectionSet* cset,

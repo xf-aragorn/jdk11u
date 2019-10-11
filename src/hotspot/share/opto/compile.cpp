@@ -394,14 +394,6 @@ void Compile::remove_useless_nodes(Unique_Node_List &useful) {
     if (n->outcnt() == 1 && n->has_special_unique_user()) {
       record_for_igvn(n->unique_out());
     }
-#if INCLUDE_SHENANDOAHGC
-    // TODO: Move into below eliminate_useless_gc_barriers(..) below
-    if (n->Opcode() == Op_AddP && ShenandoahBarrierSetC2::has_only_shenandoah_wb_pre_uses(n)) {
-      for (DUIterator_Fast imax, i = n->fast_outs(imax); i < imax; i++) {
-        record_for_igvn(n->fast_out(i));
-      }
-    }
-#endif
   }
   // Remove useless macro and predicate opaq nodes
   for (int i = C->macro_count()-1; i >= 0; i--) {
@@ -555,7 +547,7 @@ void Compile::init_scratch_buffer_blob(int const_size) {
 
     ResourceMark rm;
     _scratch_const_size = const_size;
-    int size = (MAX_inst_size + MAX_stubs_size + _scratch_const_size);
+    int size = C2Compiler::initial_code_buffer_size(const_size);
     blob = BufferBlob::create("Compile::scratch_buffer", size);
     // Record the buffer blob for next time.
     set_scratch_buffer_blob(blob);
@@ -656,6 +648,7 @@ Compile::Compile( ciEnv* ci_env, C2Compiler* compiler, ciMethod* target, int osr
                   _stub_function(NULL),
                   _stub_entry_point(NULL),
                   _method(target),
+                  _barrier_set_state(BarrierSet::barrier_set()->barrier_set_c2()->create_barrier_state(comp_arena())),
                   _entry_bci(osr_bci),
                   _initial_gvn(NULL),
                   _for_igvn(NULL),
@@ -686,7 +679,6 @@ Compile::Compile( ciEnv* ci_env, C2Compiler* compiler, ciMethod* target, int osr
                   _comp_arena(mtCompiler),
                   _node_arena(mtCompiler),
                   _old_arena(mtCompiler),
-                  _barrier_set_state(BarrierSet::barrier_set()->barrier_set_c2()->create_barrier_state(comp_arena())),
                   _Compile_types(mtCompiler),
                   _replay_inline_data(NULL),
                   _late_inlines(comp_arena(), 2, 0, NULL),
@@ -1467,11 +1459,6 @@ const TypePtr *Compile::flatten_alias_type( const TypePtr *tj ) const {
         tj = TypeInstPtr::MARK;
         ta = TypeAryPtr::RANGE; // generic ignored junk
         ptr = TypePtr::BotPTR;
-#if INCLUDE_SHENANDOAHGC
-      } else if (offset == ShenandoahBrooksPointer::byte_offset() && UseShenandoahGC) {
-        // Need to distinguish brooks ptr as is.
-        tj = ta = TypeAryPtr::make(ptr,ta->ary(),ta->klass(),false,offset);
-#endif
       } else {                  // Random constant offset into array body
         offset = Type::OffsetBot;   // Flatten constant access into array body
         tj = ta = TypeAryPtr::make(ptr,ta->ary(),ta->klass(),false,offset);
@@ -1536,7 +1523,7 @@ const TypePtr *Compile::flatten_alias_type( const TypePtr *tj ) const {
       if (!is_known_inst) { // Do it only for non-instance types
         tj = to = TypeInstPtr::make(TypePtr::BotPTR, env()->Object_klass(), false, NULL, offset);
       }
-    } else if (SHENANDOAHGC_ONLY((offset != ShenandoahBrooksPointer::byte_offset() || !UseShenandoahGC) &&) (offset < 0 || offset >= k->size_helper() * wordSize)) {
+    } else if (offset < 0 || offset >= k->size_helper() * wordSize) {
       // Static fields are in the space above the normal instance
       // fields in the java.lang.Class instance.
       if (to->klass() != ciEnv::current()->Class_klass()) {
@@ -1634,8 +1621,7 @@ const TypePtr *Compile::flatten_alias_type( const TypePtr *tj ) const {
           (offset == Type::OffsetBot && tj == TypePtr::BOTTOM) ||
           (offset == oopDesc::mark_offset_in_bytes() && tj->base() == Type::AryPtr) ||
           (offset == oopDesc::klass_offset_in_bytes() && tj->base() == Type::AryPtr) ||
-          (offset == arrayOopDesc::length_offset_in_bytes() && tj->base() == Type::AryPtr) ||
-          (UseShenandoahGC SHENANDOAHGC_ONLY(&& offset == ShenandoahBrooksPointer::byte_offset() && tj->base() == Type::AryPtr)),
+          (offset == arrayOopDesc::length_offset_in_bytes() && tj->base() == Type::AryPtr)  ,
           "For oops, klasses, raw offset must be constant; for arrays the offset is never known" );
   assert( tj->ptr() != TypePtr::TopPTR &&
           tj->ptr() != TypePtr::AnyNull &&
@@ -2410,7 +2396,7 @@ void Compile::Optimize() {
   print_method(PHASE_BEFORE_BARRIER_EXPAND, 2);
 
 #if INCLUDE_SHENANDOAHGC
-  if (UseShenandoahGC && !ShenandoahWriteBarrierNode::expand(this, igvn, loop_opts_cnt)) {
+  if (UseShenandoahGC && ((ShenandoahBarrierSetC2*)BarrierSet::barrier_set()->barrier_set_c2())->expand_barriers(this, igvn)) {
     assert(failing(), "must bail out w/ explicit message");
     return;
   }
@@ -2791,6 +2777,17 @@ void Compile::final_graph_reshaping_impl( Node *n, Final_Reshape_Counts &frc) {
                              LoadNode::is_immutable_value(n->in(MemNode::Address))),
             "raw memory operations should have control edge");
   }
+  if (n->is_MemBar()) {
+    MemBarNode* mb = n->as_MemBar();
+    if (mb->trailing_store() || mb->trailing_load_store()) {
+      assert(mb->leading_membar()->trailing_membar() == mb, "bad membar pair");
+      Node* mem = mb->in(MemBarNode::Precedent);
+      assert((mb->trailing_store() && mem->is_Store() && mem->as_Store()->is_release()) ||
+             (mb->trailing_load_store() && mem->is_LoadStore()), "missing mem op");
+    } else if (mb->leading()) {
+      assert(mb->trailing_membar()->leading_membar() == mb, "bad membar pair");
+    }
+  }
 #endif
   // Count FPU ops and common calls, implements item (3)
   switch( nop ) {
@@ -3058,7 +3055,7 @@ void Compile::final_graph_reshaping_impl( Node *n, Final_Reshape_Counts &frc) {
         Node *m = wq.at(next);
         for (DUIterator_Fast imax, i = m->fast_outs(imax); i < imax; i++) {
           Node* use = m->fast_out(i);
-          if (use->is_Mem() || use->is_EncodeNarrowPtr() || use->is_ShenandoahBarrier()) {
+          if (use->is_Mem() || use->is_EncodeNarrowPtr()) {
             use->ensure_control_or_add_prec(n->in(0));
           } else {
             switch(use->Opcode()) {
@@ -3394,6 +3391,32 @@ void Compile::final_graph_reshaping_impl( Node *n, Final_Reshape_Counts &frc) {
       n->set_req(MemBarNode::Precedent, top());
     }
     break;
+  case Op_MemBarAcquire: {
+    if (n->as_MemBar()->trailing_load() && n->req() > MemBarNode::Precedent) {
+      // At parse time, the trailing MemBarAcquire for a volatile load
+      // is created with an edge to the load. After optimizations,
+      // that input may be a chain of Phis. If those phis have no
+      // other use, then the MemBarAcquire keeps them alive and
+      // register allocation can be confused.
+      ResourceMark rm;
+      Unique_Node_List wq;
+      wq.push(n->in(MemBarNode::Precedent));
+      n->set_req(MemBarNode::Precedent, top());
+      while (wq.size() > 0) {
+        Node* m = wq.pop();
+        if (m->outcnt() == 0) {
+          for (uint j = 0; j < m->req(); j++) {
+            Node* in = m->in(j);
+            if (in != NULL) {
+              wq.push(in);
+            }
+          }
+          m->disconnect_inputs(NULL, this);
+        }
+      }
+    }
+    break;
+  }
 #if INCLUDE_SHENANDOAHGC
   case Op_ShenandoahCompareAndSwapP:
   case Op_ShenandoahCompareAndSwapN:
@@ -3412,9 +3435,7 @@ void Compile::final_graph_reshaping_impl( Node *n, Final_Reshape_Counts &frc) {
     }
 #endif
      break;
-  case Op_ShenandoahReadBarrier:
-    break;
-  case Op_ShenandoahWriteBarrier:
+  case Op_ShenandoahLoadReferenceBarrier:
     assert(false, "should have been expanded already");
     break;
 #endif

@@ -622,15 +622,11 @@ void ConnectionGraph::add_node_to_connection_graph(Node *n, Unique_Node_List *de
       break;
     }
 #if INCLUDE_SHENANDOAHGC
-    case Op_ShenandoahReadBarrier:
-    case Op_ShenandoahWriteBarrier:
-      // Barriers 'pass through' its arguments. I.e. what goes in, comes out.
-      // It doesn't escape.
-      add_local_var_and_edge(n, PointsToNode::NoEscape, n->in(ShenandoahBarrierNode::ValueIn), delayed_worklist);
-      break;
     case Op_ShenandoahEnqueueBarrier:
       add_local_var_and_edge(n, PointsToNode::NoEscape, n->in(1), delayed_worklist);
       break;
+    case Op_ShenandoahLoadReferenceBarrier:
+      add_local_var_and_edge(n, PointsToNode::NoEscape, n->in(ShenandoahLoadReferenceBarrierNode::ValueIn), delayed_worklist);
 #endif
     default:
       ; // Do nothing for nodes not related to EA.
@@ -859,14 +855,11 @@ void ConnectionGraph::add_final_edges(Node *n) {
       break;
     }
 #if INCLUDE_SHENANDOAHGC
-    case Op_ShenandoahReadBarrier:
-    case Op_ShenandoahWriteBarrier:
-      // Barriers 'pass through' its arguments. I.e. what goes in, comes out.
-      // It doesn't escape.
-      add_local_var_and_edge(n, PointsToNode::NoEscape, n->in(ShenandoahBarrierNode::ValueIn), NULL);
-      break;
     case Op_ShenandoahEnqueueBarrier:
       add_local_var_and_edge(n, PointsToNode::NoEscape, n->in(1), NULL);
+      break;
+    case Op_ShenandoahLoadReferenceBarrier:
+      add_local_var_and_edge(n, PointsToNode::NoEscape, n->in(ShenandoahLoadReferenceBarrierNode::ValueIn), NULL);
       break;
 #endif
     default: {
@@ -1821,7 +1814,8 @@ void ConnectionGraph::adjust_scalar_replaceable_state(JavaObjectNode* jobj) {
     }
 
     for (DUIterator_Fast imax, i = n->fast_outs(imax); i < imax; i++) {
-      if (n->fast_out(i)->is_LoadStore()) {
+      Node* u = n->fast_out(i);
+      if (u->is_LoadStore() || (u->is_Mem() && u->as_Mem()->is_mismatched_access())) {
         jobj->set_scalar_replaceable(false);
         return;
       }
@@ -2430,7 +2424,7 @@ Node* ConnectionGraph::get_addp_base(Node *addp) {
              opcode == Op_CastX2P || uncast_base->is_DecodeNarrowPtr() ||
              (uncast_base->is_Mem() && (uncast_base->bottom_type()->isa_rawptr() != NULL)) ||
              (uncast_base->is_Proj() && uncast_base->in(0)->is_Allocate()) ||
-             uncast_base->is_ShenandoahBarrier(), "sanity");
+             uncast_base->Opcode() == Op_ShenandoahLoadReferenceBarrier, "sanity");
     }
   }
   return base;
@@ -3105,6 +3099,11 @@ void ConnectionGraph::split_unique_types(GrowableArray<Node *>  &alloc_worklist,
       n->raise_bottom_type(tinst);
       igvn->hash_insert(n);
       record_for_optimizer(n);
+      // Allocate an alias index for the header fields. Accesses to
+      // the header emitted during macro expansion wouldn't have
+      // correct memory state otherwise.
+      _compile->get_alias_index(tinst->add_offset(oopDesc::mark_offset_in_bytes()));
+      _compile->get_alias_index(tinst->add_offset(oopDesc::klass_offset_in_bytes()));
       if (alloc->is_Allocate() && (t->isa_instptr() || t->isa_aryptr())) {
 
         // First, put on the worklist all Field edges from Connection Graph
@@ -3163,7 +3162,7 @@ void ConnectionGraph::split_unique_types(GrowableArray<Node *>  &alloc_worklist,
                n->is_CheckCastPP() ||
                n->is_EncodeP() ||
                n->is_DecodeN() ||
-               n->is_ShenandoahBarrier() ||
+               n->Opcode() == Op_ShenandoahLoadReferenceBarrier ||
                (n->is_ConstraintCast() && n->Opcode() == Op_CastPP)) {
       if (visited.test_set(n->_idx)) {
         assert(n->is_Phi(), "loops only through Phi's");
@@ -3234,7 +3233,7 @@ void ConnectionGraph::split_unique_types(GrowableArray<Node *>  &alloc_worklist,
                  use->is_CheckCastPP() ||
                  use->is_EncodeNarrowPtr() ||
                  use->is_DecodeNarrowPtr() ||
-                 use->is_ShenandoahBarrier() ||
+                 use->Opcode() == Op_ShenandoahLoadReferenceBarrier ||
                  (use->is_ConstraintCast() && use->Opcode() == Op_CastPP)) {
         alloc_worklist.append_if_missing(use);
 #ifdef ASSERT
@@ -3265,7 +3264,6 @@ void ConnectionGraph::split_unique_types(GrowableArray<Node *>  &alloc_worklist,
               op == Op_FastLock || op == Op_AryEq || op == Op_StrComp || op == Op_HasNegatives ||
               op == Op_StrCompressedCopy || op == Op_StrInflatedCopy ||
               op == Op_StrEquals || op == Op_StrIndexOf || op == Op_StrIndexOfChar ||
-              op == Op_ShenandoahWBMemProj ||
               BarrierSet::barrier_set()->barrier_set_c2()->is_gc_barrier_node(use))) {
           n->dump();
           use->dump();
