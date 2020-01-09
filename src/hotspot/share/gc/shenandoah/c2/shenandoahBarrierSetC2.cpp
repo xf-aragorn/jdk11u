@@ -246,7 +246,7 @@ void ShenandoahBarrierSetC2::satb_write_barrier_pre(GraphKit* kit,
   // if (!marking)
   __ if_then(marking, BoolTest::ne, zero, unlikely); {
     BasicType index_bt = TypeX_X->basic_type();
-    assert(sizeof(size_t) == type2aelembytes(index_bt), "Loading G1 SATBMarkQueue::_index with wrong size.");
+    assert(sizeof(size_t) == type2aelembytes(index_bt), "Loading Shenandoah SATBMarkQueue::_index with wrong size.");
     Node* index   = __ load(__ ctrl(), index_adr, TypeX_X, index_bt, Compile::AliasIdxRaw);
 
     if (do_load) {
@@ -1002,3 +1002,14 @@ bool ShenandoahBarrierSetC2::has_only_shenandoah_wb_pre_uses(Node* n) {
   }
   return n->outcnt() > 0;
 }
+
+Node* ShenandoahBarrierSetC2::arraycopy_load_reference_barrier(PhaseGVN *phase, Node* v) {
+  if (ShenandoahLoadRefBarrier) {
+    return phase->transform(new ShenandoahLoadReferenceBarrierNode(NULL, v));
+  }
+  if (ShenandoahStoreValEnqueueBarrier) {
+    return phase->transform(new ShenandoahEnqueueBarrierNode(v));
+  }
+  return v;
+}
+

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -48,9 +48,6 @@ class SATBMarkQueue: public PtrQueue {
 private:
   // Filter out unwanted entries from the buffer.
   void filter();
-
-  template <class HeapType>
-  void filter_impl();
 
 public:
   SATBMarkQueue(SATBMarkQueueSet* qset, bool permanent = false);
@@ -104,7 +101,7 @@ public:
                   int process_completed_threshold,
                   Mutex* lock);
 
-  virtual SATBMarkQueue& satb_queue_for_thread(Thread* t) = 0;
+  static void handle_zero_index_for_thread(JavaThread* t);
 
   // Apply "set_active(active)" to all SATB queues in the set. It should be
   // called only with the world stopped. The method will assert that the
@@ -130,12 +127,6 @@ public:
 
   // If a marking is being abandoned, reset any unprocessed log buffers.
   void abandon_partial_marking();
-};
-
-class G1SATBMarkQueueSet : public SATBMarkQueueSet {
-public:
-  static void handle_zero_index_for_thread(JavaThread* t);
-  virtual SATBMarkQueue& satb_queue_for_thread(Thread* t);
 };
 
 #endif // SHARE_VM_GC_G1_SATBMARKQUEUE_HPP
