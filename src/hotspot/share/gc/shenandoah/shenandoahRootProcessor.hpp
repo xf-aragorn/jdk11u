@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2019, Red Hat, Inc. All rights reserved.
+ * Copyright (c) 2015, 2020, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -39,7 +39,7 @@ class ShenandoahSerialRoot {
 public:
   typedef void (*OopsDo)(OopClosure*);
 private:
-  volatile bool                             _claimed;
+  ShenandoahSharedFlag                      _claimed;
   const OopsDo                              _oops_do;
   const ShenandoahPhaseTimings::GCParPhases _phase;
 
@@ -82,7 +82,7 @@ public:
 
 class ShenandoahWeakRoots {
   OopStorage::ParState<false, false> _par_state_string;
-  volatile bool                             _claimed;
+  volatile bool                      _claimed;
 
 public:
   ShenandoahWeakRoots(uint n_workers);
@@ -138,6 +138,7 @@ private:
   ShenandoahThreadRoots                                     _thread_roots;
   ShenandoahCodeCacheRoots<ITR>                             _code_roots;
   ShenandoahJNIHandleRoots                                  _jni_roots;
+  ShenandoahStringDedupRoots                                _dedup_roots;
   ShenandoahClassLoaderDataRoots<false /*single threaded*/> _cld_roots;
 public:
   ShenandoahRootScanner(uint n_workers, ShenandoahPhaseTimings::Phase phase);

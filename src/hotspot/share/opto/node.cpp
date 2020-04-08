@@ -1407,7 +1407,7 @@ static void kill_dead_code( Node *dead, PhaseIterGVN *igvn ) {
             // and remove_globally_dead_node().
             igvn->add_users_to_worklist( n );
           } else {
-            BarrierSet::barrier_set()->barrier_set_c2()->enqueue_useful_gc_barrier(igvn->_worklist, n);
+            BarrierSet::barrier_set()->barrier_set_c2()->enqueue_useful_gc_barrier(igvn, n);
           }
         }
       }
@@ -2118,7 +2118,8 @@ void Node::verify_edges(Unique_Node_List &visited) {
       }
       assert( cnt == 0,"Mismatched edge count.");
     } else if (n == NULL) {
-      assert(i >= req() || i == 0 || is_Region() || is_Phi(), "only regions or phis have null data edges");
+      assert(i >= req() || i == 0 || is_Region() || is_Phi() || is_ArrayCopy()
+              || (is_Unlock() && i == req()-1), "only region, phi, arraycopy or unlock nodes have null data edges");
     } else {
       assert(n->is_top(), "sanity");
       // Nothing to check.
@@ -2131,9 +2132,6 @@ void Node::verify_edges(Unique_Node_List &visited) {
       in(i)->verify_edges(visited);
   }
 }
-
-//------------------------------verify_recur-----------------------------------
-static const Node *unique_top = NULL;
 
 void Node::verify_recur(const Node *n, int verify_depth,
                         VectorSet &old_space, VectorSet &new_space) {

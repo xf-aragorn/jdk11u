@@ -78,7 +78,7 @@ private:
   void insert_pre_barrier(GraphKit* kit, Node* base_oop, Node* offset,
                           Node* pre_val, bool need_mem_bar) const;
 
-  static bool clone_needs_postbarrier(ArrayCopyNode *ac, PhaseIterGVN& igvn);
+  static bool clone_needs_barrier(Node* src, PhaseGVN& gvn);
 
 protected:
   virtual Node* load_at_resolved(C2Access& access, const Type* val_type) const;
@@ -106,8 +106,6 @@ public:
   virtual bool has_load_barriers() const { return true; }
 
   // This is the entry-point for the backend to perform accesses through the Access API.
-  virtual void clone(GraphKit* kit, Node* src, Node* dst, Node* size, bool is_array) const;
-
   virtual void clone_at_expansion(PhaseMacroExpand* phase, ArrayCopyNode* ac) const;
 
   // These are general helper methods used by C2
@@ -125,7 +123,7 @@ public:
   virtual void register_potential_barrier_node(Node* node) const;
   virtual void unregister_potential_barrier_node(Node* node) const;
   virtual void eliminate_gc_barrier(PhaseMacroExpand* macro, Node* node) const;
-  virtual void enqueue_useful_gc_barrier(Unique_Node_List &worklist, Node* node) const;
+  virtual void enqueue_useful_gc_barrier(PhaseIterGVN* igvn, Node* node) const;
   virtual void eliminate_useless_gc_barriers(Unique_Node_List &useful) const;
   virtual void add_users_to_worklist(Unique_Node_List* worklist) const;
 

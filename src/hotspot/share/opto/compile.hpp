@@ -91,13 +91,13 @@ class Node_Stack;
 struct Final_Reshape_Counts;
 
 enum LoopOptsMode {
-  LoopOptsDefault = 0,
-  LoopOptsNone = 1,
-  LoopOptsSkipSplitIf = 2,
-  LoopOptsShenandoahExpand = 3,
-  LoopOptsShenandoahPostExpand = 4,
-  LoopOptsVerify = 5,
-  LoopOptsZgcLastRound = 6
+  LoopOptsDefault,
+  LoopOptsNone,
+  LoopOptsSkipSplitIf,
+  LoopOptsShenandoahExpand,
+  LoopOptsShenandoahPostExpand,
+  LoopOptsVerify,
+  LoopOptsLastRound
 };
 
 typedef unsigned int node_idx_t;
@@ -511,6 +511,8 @@ class Compile : public Phase {
     PrintInliningBuffer()
       : _cg(NULL) { _ss = new stringStream(); }
 
+    void freeStream() { _ss->~stringStream(); _ss = NULL; }
+
     stringStream* ss() const { return _ss; }
     CallGenerator* cg() const { return _cg; }
     void set_cg(CallGenerator* cg) { _cg = cg; }
@@ -532,6 +534,7 @@ class Compile : public Phase {
 
   void* _replay_inline_data; // Pointer to data loaded from file
 
+  void print_inlining_stream_free();
   void print_inlining_init();
   void print_inlining_reinit();
   void print_inlining_commit();

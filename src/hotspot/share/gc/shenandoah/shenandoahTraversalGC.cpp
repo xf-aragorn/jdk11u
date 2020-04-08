@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2019, Red Hat, Inc. All rights reserved.
+ * Copyright (c) 2018, 2020, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -176,7 +176,6 @@ public:
   void work(uint worker_id) {
     ShenandoahParallelWorkerSession worker_session(worker_id);
 
-    ShenandoahEvacOOMScope oom_evac_scope;
     ShenandoahObjToScanQueueSet* queues = _heap->traversal_gc()->task_queues();
     ShenandoahObjToScanQueue* q = queues->queue(worker_id);
 
@@ -197,9 +196,6 @@ public:
       } else {
         _rp->roots_do(worker_id, &roots_cl, &cld_cl, &code_cl);
       }
-
-      AlwaysTrueClosure is_alive;
-      _dedup_roots.oops_do(&is_alive, &roots_cl, worker_id);
     }
   }
 };
@@ -217,7 +213,6 @@ public:
   void work(uint worker_id) {
     ShenandoahConcurrentWorkerSession worker_session(worker_id);
     ShenandoahSuspendibleThreadSetJoiner stsj(ShenandoahSuspendibleWorkers);
-    ShenandoahEvacOOMScope oom_evac_scope;
     ShenandoahTraversalGC* traversal_gc = _heap->traversal_gc();
 
     // Drain all outstanding work in queues.
@@ -240,7 +235,6 @@ public:
   void work(uint worker_id) {
     ShenandoahParallelWorkerSession worker_session(worker_id);
 
-    ShenandoahEvacOOMScope oom_evac_scope;
     ShenandoahTraversalGC* traversal_gc = _heap->traversal_gc();
 
     ShenandoahObjToScanQueueSet* queues = traversal_gc->task_queues();
@@ -265,15 +259,16 @@ public:
 
     // Step 1: Process GC roots.
     // For oops in code roots, they are marked, evacuated, enqueued for further traversal,
-    // and the references to the oops are updated during init pause. New nmethods are handled
-    // in similar way during nmethod-register process. Therefore, we don't need to rescan code
-    // roots here.
+    // and the references to the oops are updated during init pause. We only need to rescan
+    // on stack code roots, in case of class unloading is enabled. Otherwise, code roots are
+    // scanned during init traversal or degenerated GC will update them at the end.
     if (!_heap->is_degenerated_gc_in_progress()) {
       ShenandoahTraversalRootsClosure roots_cl(q, rp);
       ShenandoahTraversalSATBThreadsClosure tc(&satb_cl);
       if (unload_classes) {
         ShenandoahRemarkCLDClosure remark_cld_cl(&roots_cl);
-        _rp->strong_roots_do(worker_id, &roots_cl, &remark_cld_cl, NULL, &tc);
+        MarkingCodeBlobClosure code_cl(&roots_cl, CodeBlobToOopClosure::FixRelocations);
+        _rp->strong_roots_do(worker_id, &roots_cl, &remark_cld_cl, &code_cl, &tc);
       } else {
         CLDToOopClosure cld_cl(&roots_cl);
         _rp->roots_do(worker_id, &roots_cl, &cld_cl, NULL, &tc);
@@ -405,6 +400,7 @@ void ShenandoahTraversalGC::init_traversal_collection() {
   }
 
   _heap->set_concurrent_traversal_in_progress(true);
+  _heap->set_has_forwarded_objects(true);
 
   bool process_refs = _heap->process_references();
   if (process_refs) {
@@ -551,9 +547,7 @@ void ShenandoahTraversalGC::main_loop_work(T* cl, jushort* live_data, uint worke
 
     if (work == 0) {
       // No more work, try to terminate
-      ShenandoahEvacOOMScopeLeaver oom_scope_leaver;
       ShenandoahSuspendibleThreadSetLeaver stsl(sts_yield && ShenandoahSuspendibleWorkers);
-      ShenandoahTerminationTimingsTracker term_tracker(worker_id);
       ShenandoahTerminatorTerminator tt(_heap);
 
       if (terminator->offer_termination(&tt)) return;
@@ -573,7 +567,6 @@ void ShenandoahTraversalGC::concurrent_traversal_collection() {
   if (!_heap->cancelled_gc()) {
     uint nworkers = _heap->workers()->active_workers();
     task_queues()->reserve(nworkers);
-    ShenandoahTerminationTracker tracker(ShenandoahPhaseTimings::conc_traversal_termination);
 
     ShenandoahTaskTerminator terminator(nworkers, task_queues());
     ShenandoahConcurrentTraversalCollectionTask task(&terminator);
@@ -586,8 +579,6 @@ void ShenandoahTraversalGC::concurrent_traversal_collection() {
 }
 
 void ShenandoahTraversalGC::final_traversal_collection() {
-  _heap->make_parsable(true);
-
   if (!_heap->cancelled_gc()) {
 #if COMPILER2_OR_JVMCI
     DerivedPointerTable::clear();
@@ -598,8 +589,6 @@ void ShenandoahTraversalGC::final_traversal_collection() {
 
     // Finish traversal
     ShenandoahAllRootScanner rp(nworkers, ShenandoahPhaseTimings::final_traversal_gc_work);
-    ShenandoahTerminationTracker term(ShenandoahPhaseTimings::final_traversal_gc_termination);
-
     ShenandoahTaskTerminator terminator(nworkers, task_queues());
     ShenandoahFinalTraversalCollectionTask task(&rp, &terminator);
     _heap->workers()->run_task(&task);
@@ -613,22 +602,23 @@ void ShenandoahTraversalGC::final_traversal_collection() {
   }
 
   if (!_heap->cancelled_gc()) {
-    fixup_roots();
-    if (_heap->unload_classes()) {
-      _heap->unload_classes_and_cleanup_tables(false);
-    } else {
-      ShenandoahIsAliveSelector alive;
-      StringTable::unlink(alive.is_alive_closure());
-    }
-  }
-
-  if (!_heap->cancelled_gc()) {
     assert(_task_queues->is_empty(), "queues must be empty after traversal GC");
     TASKQUEUE_STATS_ONLY(_task_queues->print_taskqueue_stats());
     TASKQUEUE_STATS_ONLY(_task_queues->reset_taskqueue_stats());
 
     // No more marking expected
+    _heap->set_concurrent_traversal_in_progress(false);
     _heap->mark_complete_marking_context();
+
+    // A rare case, TLAB/GCLAB is initialized from an empty region without
+    // any live data, the region can be trashed and may be uncommitted in later code,
+    // that results the TLAB/GCLAB not usable. Retire them here.
+    _heap->make_parsable(true);
+
+    fixup_roots();
+    _heap->parallel_cleaning(false);
+
+    _heap->set_has_forwarded_objects(false);
 
     // Resize metaspace
     MetaspaceGC::compute_new_size();
@@ -682,17 +672,45 @@ void ShenandoahTraversalGC::final_traversal_collection() {
     }
 
     assert(_task_queues->is_empty(), "queues must be empty after traversal GC");
-    _heap->set_concurrent_traversal_in_progress(false);
     assert(!_heap->cancelled_gc(), "must not be cancelled when getting out here");
 
     if (ShenandoahVerify) {
       _heap->verifier()->verify_after_traversal();
     }
+#ifdef ASSERT
+    else {
+      verify_roots_after_gc();
+    }
+#endif
 
     if (VerifyAfterGC) {
       Universe::verify();
     }
   }
+}
+
+class ShenandoahVerifyAfterGC : public OopClosure {
+private:
+  template <class T>
+  void do_oop_work(T* p) {
+    T o = RawAccess<>::oop_load(p);
+    if (!CompressedOops::is_null(o)) {
+      oop obj = CompressedOops::decode_not_null(o);
+      shenandoah_assert_correct(p, obj);
+      shenandoah_assert_not_in_cset_except(p, obj, ShenandoahHeap::heap()->cancelled_gc());
+      shenandoah_assert_not_forwarded(p, obj);
+    }
+  }
+
+public:
+  void do_oop(narrowOop* p) { do_oop_work(p); }
+  void do_oop(oop* p)       { do_oop_work(p); }
+};
+
+void ShenandoahTraversalGC::verify_roots_after_gc() {
+  ShenandoahRootVerifier verifier;
+  ShenandoahVerifyAfterGC cl;
+  verifier.oops_do(&cl);
 }
 
 class ShenandoahTraversalFixRootsClosure : public OopClosure {
@@ -826,7 +844,6 @@ private:
 
   template <class T>
   inline void do_oop_work(T* p) {
-    ShenandoahEvacOOMScope evac_scope;
     _traversal_gc->process_oop<T, false /* string dedup */, false /* degen */, true /* atomic update */>(p, _thread, _queue, _mark_context);
   }
 
@@ -849,7 +866,6 @@ private:
 
   template <class T>
   inline void do_oop_work(T* p) {
-    ShenandoahEvacOOMScope evac_scope;
     _traversal_gc->process_oop<T, false /* string dedup */, true /* degen */, false /* atomic update */>(p, _thread, _queue, _mark_context);
   }
 
@@ -876,7 +892,6 @@ public:
     assert(worker_id == 0, "The code below is single-threaded, only one worker is expected");
     ShenandoahParallelWorkerSession worker_session(worker_id);
     ShenandoahSuspendibleThreadSetJoiner stsj(ShenandoahSuspendibleWorkers);
-    ShenandoahEvacOOMScope oom_evac_scope;
 
     ShenandoahHeap* sh = ShenandoahHeap::heap();
 
@@ -983,7 +998,6 @@ public:
     assert(sh->process_references(), "why else would we be here?");
     shenandoah_assert_rp_isalive_installed();
 
-    ShenandoahEvacOOMScope evac_scope;
     traversal_gc->main_loop(_worker_id, _terminator, false);
 
     if (_reset_terminator) {
@@ -1025,7 +1039,6 @@ public:
   }
 
   void work(uint worker_id) {
-    ShenandoahEvacOOMScope oom_evac_scope;
     assert(ShenandoahSafepoint::is_at_shenandoah_safepoint(), "Must be at a safepoint");
     ShenandoahHeap* heap = ShenandoahHeap::heap();
     ShenandoahTraversalDrainMarkingStackClosure complete_gc(worker_id, _terminator);

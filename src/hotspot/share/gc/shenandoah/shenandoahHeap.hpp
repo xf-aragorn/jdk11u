@@ -428,6 +428,9 @@ private:
   const char* init_mark_event_message() const;
   const char* final_mark_event_message() const;
   const char* conc_mark_event_message() const;
+  const char* init_traversal_event_message() const;
+  const char* final_traversal_event_message() const;
+  const char* conc_traversal_event_message() const;
   const char* degen_event_message(ShenandoahDegenPoint point) const;
 
 // ---------- GC subsystems
@@ -444,7 +447,6 @@ private:
   ShenandoahPacer*           _pacer;
   ShenandoahVerifier*        _verifier;
 
-  ShenandoahAllocTracker*    _alloc_tracker;
   ShenandoahPhaseTimings*    _phase_timings;
 
   ShenandoahControlThread*   control_thread()          { return _control_thread;    }
@@ -460,7 +462,6 @@ public:
   ShenandoahPacer*           pacer()             const { return _pacer;             }
 
   ShenandoahPhaseTimings*    phase_timings()     const { return _phase_timings;     }
-  ShenandoahAllocTracker*    alloc_tracker()     const { return _alloc_tracker;     }
 
   ShenandoahVerifier*        verifier();
 
@@ -510,9 +511,12 @@ public:
   void set_unload_classes(bool uc);
   bool unload_classes() const;
 
-  // Delete entries for dead interned string and clean up unreferenced symbols
-  // in symbol table, possibly in parallel.
-  void unload_classes_and_cleanup_tables(bool full_gc);
+  // Perform STW class unloading and weak root cleaning
+  void parallel_cleaning(bool full_gc);
+
+private:
+  void stw_unload_classes(bool full_gc);
+  void stw_process_weak_roots(bool full_gc);
 
 // ---------- Generic interface hooks
 // Minor things that super-interface expects us to implement to play nice with
@@ -700,12 +704,11 @@ public:
 
   static inline oop cas_oop(oop n, narrowOop* addr, oop c);
   static inline oop cas_oop(oop n, oop* addr, oop c);
+  static inline oop cas_oop(oop n, narrowOop* addr, narrowOop c);
 
   void trash_humongous_region_at(ShenandoahHeapRegion *r);
 
   void deduplicate_string(oop str);
-
-  void stop_concurrent_marking();
 
 private:
   void trash_cset_regions();

@@ -34,7 +34,7 @@
 #include "memory/allocation.hpp"
 #include "runtime/safepoint.hpp"
 #include "runtime/vmThread.hpp"
-#include "runtime/vm_operations.hpp"
+#include "runtime/vmOperations.hpp"
 #include "services/memoryService.hpp"
 
 class GCTimer;
@@ -83,16 +83,6 @@ private:
 public:
   ShenandoahGCPauseMark(uint gc_id, SvcGCMarker::reason_type type);
   ~ShenandoahGCPauseMark();
-};
-
-class ShenandoahAllocTrace : public StackObj {
-private:
-  double _start;
-  size_t _size;
-  ShenandoahAllocRequest::Type _alloc_type;
-public:
-  ShenandoahAllocTrace(size_t words_size, ShenandoahAllocRequest::Type alloc_type);
-  ~ShenandoahAllocTrace();
 };
 
 class ShenandoahSafepoint : public AllStatic {

@@ -179,6 +179,9 @@ final class SupportedGroupsExtension {
         // Elliptic Curves (RFC 4492)
         //
         // See sun.security.util.CurveDB for the OIDs
+        SECP256_K1  (0x0016, "secp256k1", "1.3.132.0.10", false,
+                            ProtocolVersion.PROTOCOLS_TO_12),
+
         // NIST P-256
         SECP256_R1  (0x0017, "secp256r1", "1.2.840.10045.3.1.7", true,
                             ProtocolVersion.PROTOCOLS_TO_13),

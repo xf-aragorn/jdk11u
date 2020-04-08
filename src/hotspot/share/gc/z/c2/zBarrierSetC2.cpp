@@ -114,9 +114,9 @@ void ZBarrierSetC2::eliminate_useless_gc_barriers(Unique_Node_List &useful) cons
   }
 }
 
-void ZBarrierSetC2::enqueue_useful_gc_barrier(Unique_Node_List &worklist, Node* node) const {
+void ZBarrierSetC2::enqueue_useful_gc_barrier(PhaseIterGVN* igvn, Node* node) const {
   if (node->is_LoadBarrier() && !node->as_LoadBarrier()->has_true_uses()) {
-    worklist.push(node);
+    igvn->_worklist.push(node);
   }
 }
 
@@ -129,7 +129,7 @@ void ZBarrierSetC2::find_dominating_barriers(PhaseIterGVN& igvn) {
   ZBarrierSetC2State* s = bs->state();
   if (s->load_barrier_count() >= 2) {
     Compile::TracePhase tp("idealLoop", &C->timers[Phase::_t_idealLoop]);
-    PhaseIdealLoop ideal_loop(igvn, LoopOptsZgcLastRound);
+    PhaseIdealLoop ideal_loop(igvn, LoopOptsLastRound);
     if (C->major_progress()) C->print_method(PHASE_PHASEIDEALLOOP_ITERATIONS, 2);
   }
 }

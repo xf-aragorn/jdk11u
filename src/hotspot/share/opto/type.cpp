@@ -3046,10 +3046,6 @@ const TypeOopPtr *TypeOopPtr::cast_to_instance_id(int instance_id) const {
   return this;
 }
 
-const TypeOopPtr *TypeOopPtr::cast_to_nonconst() const {
-  return this;
-}
-
 //-----------------------------cast_to_exactness-------------------------------
 const Type *TypeOopPtr::cast_to_exactness(bool klass_is_exact) const {
   // There is no such thing as an exact general oop.
@@ -3550,11 +3546,6 @@ const Type *TypeInstPtr::cast_to_exactness(bool klass_is_exact) const {
 const TypeOopPtr *TypeInstPtr::cast_to_instance_id(int instance_id) const {
   if( instance_id == _instance_id ) return this;
   return make(_ptr, klass(), _klass_is_exact, const_oop(), _offset, instance_id, _speculative, _inline_depth);
-}
-
-const TypeOopPtr *TypeInstPtr::cast_to_nonconst() const {
-  if (const_oop() == NULL) return this;
-  return make(NotNull, klass(), _klass_is_exact, NULL, _offset, _instance_id, _speculative, _inline_depth);
 }
 
 //------------------------------xmeet_unloaded---------------------------------
@@ -4084,38 +4075,22 @@ const TypeOopPtr *TypeAryPtr::cast_to_instance_id(int instance_id) const {
   return make(_ptr, const_oop(), _ary, klass(), _klass_is_exact, _offset, instance_id, _speculative, _inline_depth);
 }
 
-const TypeOopPtr *TypeAryPtr::cast_to_nonconst() const {
-  if (const_oop() == NULL) return this;
-  return make(NotNull, NULL, _ary, klass(), _klass_is_exact, _offset, _instance_id, _speculative, _inline_depth);
+//-----------------------------max_array_length-------------------------------
+// A wrapper around arrayOopDesc::max_array_length(etype) with some input normalization.
+jint TypeAryPtr::max_array_length(BasicType etype) {
+  if (!is_java_primitive(etype) && !is_reference_type(etype)) {
+    if (etype == T_NARROWOOP) {
+      etype = T_OBJECT;
+    } else if (etype == T_ILLEGAL) { // bottom[]
+      etype = T_BYTE; // will produce conservatively high value
+    } else {
+      fatal("not an element type: %s", type2name(etype));
+    }
+  }
+  return arrayOopDesc::max_array_length(etype);
 }
-
 
 //-----------------------------narrow_size_type-------------------------------
-// Local cache for arrayOopDesc::max_array_length(etype),
-// which is kind of slow (and cached elsewhere by other users).
-static jint max_array_length_cache[T_CONFLICT+1];
-static jint max_array_length(BasicType etype) {
-  jint& cache = max_array_length_cache[etype];
-  jint res = cache;
-  if (res == 0) {
-    switch (etype) {
-    case T_NARROWOOP:
-      etype = T_OBJECT;
-      break;
-    case T_NARROWKLASS:
-    case T_CONFLICT:
-    case T_ILLEGAL:
-    case T_VOID:
-      etype = T_BYTE;           // will produce conservatively high value
-      break;
-    default:
-      break;
-    }
-    cache = res = arrayOopDesc::max_array_length(etype);
-  }
-  return res;
-}
-
 // Narrow the given size type to the index range for the given array base type.
 // Return NULL if the resulting int type becomes empty.
 const TypeInt* TypeAryPtr::narrow_size_type(const TypeInt* size) const {

@@ -860,7 +860,10 @@ Node *PhaseGVN::transform_no_reclaim( Node *n ) {
 }
 
 bool PhaseGVN::is_dominator_helper(Node *d, Node *n, bool linear_only) {
-  if (d->is_top() || n->is_top()) {
+  if (d->is_top() || (d->is_Proj() && d->in(0)->is_top())) {
+    return false;
+  }
+  if (n->is_top() || (n->is_Proj() && n->in(0)->is_top())) {
     return false;
   }
   assert(d->is_CFG() && n->is_CFG(), "must have CFG nodes");
@@ -1392,7 +1395,7 @@ void PhaseIterGVN::remove_globally_dead_node( Node *dead ) {
                 assert(!(i < imax), "sanity");
               }
             } else {
-              BarrierSet::barrier_set()->barrier_set_c2()->enqueue_useful_gc_barrier(_worklist, in);
+              BarrierSet::barrier_set()->barrier_set_c2()->enqueue_useful_gc_barrier(this, in);
             }
             if (ReduceFieldZeroing && dead->is_Load() && i == MemNode::Memory &&
                 in->is_Proj() && in->in(0) != NULL && in->in(0)->is_Initialize()) {
@@ -2116,7 +2119,7 @@ void Node::set_req_X( uint i, Node *n, PhaseIterGVN *igvn ) {
     }
     if (UseShenandoahGC) {
       // TODO: Should we call this for ZGC as well?
-      BarrierSet::barrier_set()->barrier_set_c2()->enqueue_useful_gc_barrier(igvn->_worklist, old);
+      BarrierSet::barrier_set()->barrier_set_c2()->enqueue_useful_gc_barrier(igvn, old);
     }
   }
 

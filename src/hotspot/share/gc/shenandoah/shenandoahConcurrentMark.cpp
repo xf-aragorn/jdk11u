@@ -173,14 +173,15 @@ public:
   }
 };
 
-class ShenandoahSATBThreadsClosure : public ThreadClosure {
+class ShenandoahSATBAndRemarkCodeRootsThreadsClosure : public ThreadClosure {
 private:
   ShenandoahConcMarkSATBBufferClosure* _satb_cl;
+  MarkingCodeBlobClosure*              _code_cl;
   int _thread_parity;
 
 public:
-  ShenandoahSATBThreadsClosure(ShenandoahConcMarkSATBBufferClosure* satb_cl) :
-    _satb_cl(satb_cl),
+  ShenandoahSATBAndRemarkCodeRootsThreadsClosure(ShenandoahConcMarkSATBBufferClosure* satb_cl, MarkingCodeBlobClosure* code_cl) :
+    _satb_cl(satb_cl), _code_cl(code_cl),
     _thread_parity(Threads::thread_claim_parity()) {}
 
   void do_thread(Thread* thread) {
@@ -188,6 +189,16 @@ public:
       if (thread->claim_oops_do(true, _thread_parity)) {
         JavaThread* jt = (JavaThread*)thread;
         ShenandoahThreadLocalData::satb_mark_queue(jt).apply_closure_and_empty(_satb_cl);
+        if (_code_cl != NULL && thread->is_Java_thread()) {
+          // In theory it should not be neccessary to explicitly walk the nmethods to find roots for concurrent marking
+          // however the liveness of oops reachable from nmethods have very complex lifecycles:
+          // * Alive if on the stack of an executing method
+          // * Weakly reachable otherwise
+          // Some objects reachable from nmethods, such as the class loader (or klass_holder) of the receiver should be
+          // live by the SATB invariant but other oops recorded in nmethods may behave differently.
+          JavaThread* jt = (JavaThread*)thread;
+          jt->nmethods_do(_code_cl);
+        }
       }
     } else if (thread->is_VM_thread()) {
       if (thread->claim_oops_do(true, _thread_parity)) {
@@ -212,6 +223,14 @@ public:
     ShenandoahHeap* heap = ShenandoahHeap::heap();
 
     ShenandoahParallelWorkerSession worker_session(worker_id);
+    ReferenceProcessor* rp;
+    if (heap->process_references()) {
+      rp = heap->ref_processor();
+      shenandoah_assert_rp_isalive_installed();
+    } else {
+      rp = NULL;
+    }
+
     // First drain remaining SATB buffers.
     // Notice that this is not strictly necessary for mark-compact. But since
     // it requires a StrongRootsScope around the task, we need to claim the
@@ -222,16 +241,22 @@ public:
       ShenandoahConcMarkSATBBufferClosure cl(q);
       ShenandoahSATBMarkQueueSet& satb_mq_set = ShenandoahBarrierSet::satb_mark_queue_set();
       while (satb_mq_set.apply_closure_to_completed_buffer(&cl));
-      ShenandoahSATBThreadsClosure tc(&cl);
-      Threads::threads_do(&tc);
-    }
-
-    ReferenceProcessor* rp;
-    if (heap->process_references()) {
-      rp = heap->ref_processor();
-      shenandoah_assert_rp_isalive_installed();
-    } else {
-      rp = NULL;
+      if (heap->unload_classes()) {
+        if (heap->has_forwarded_objects()) {
+          ShenandoahMarkResolveRefsClosure resolve_mark_cl(q, rp);
+          MarkingCodeBlobClosure blobsCl(&resolve_mark_cl, !CodeBlobToOopClosure::FixRelocations);
+          ShenandoahSATBAndRemarkCodeRootsThreadsClosure tc(&cl, &blobsCl);
+          Threads::threads_do(&tc);
+        } else {
+          ShenandoahMarkRefsClosure mark_cl(q, rp);
+          MarkingCodeBlobClosure blobsCl(&mark_cl, !CodeBlobToOopClosure::FixRelocations);
+          ShenandoahSATBAndRemarkCodeRootsThreadsClosure tc(&cl, &blobsCl);
+          Threads::threads_do(&tc);
+        }
+      } else {
+        ShenandoahSATBAndRemarkCodeRootsThreadsClosure tc(&cl, NULL);
+        Threads::threads_do(&tc);
+      }
     }
 
     if (heap->is_degenerated_gc_in_progress()) {
@@ -413,7 +438,6 @@ void ShenandoahConcurrentMark::mark_from_roots() {
   task_queues()->reserve(nworkers);
 
   {
-    ShenandoahTerminationTracker term(ShenandoahPhaseTimings::conc_termination);
     ShenandoahTaskTerminator terminator(nworkers, task_queues());
     ShenandoahConcurrentMarkingTask task(this, &terminator);
     workers->run_task(&task);
@@ -444,10 +468,6 @@ void ShenandoahConcurrentMark::finish_mark_from_roots(bool full_gc) {
     ShenandoahIsAliveSelector is_alive;
     ReferenceProcessorIsAliveMutator fix_isalive(_heap->ref_processor(), is_alive.is_alive_closure());
 
-    ShenandoahTerminationTracker termination_tracker(full_gc ?
-                                                     ShenandoahPhaseTimings::full_gc_mark_termination :
-                                                     ShenandoahPhaseTimings::termination);
-
     StrongRootsScope scope(nworkers);
     ShenandoahTaskTerminator terminator(nworkers, task_queues());
     ShenandoahFinalMarkingTask task(this, &terminator, ShenandoahStringDedup::is_enabled());
@@ -460,27 +480,6 @@ void ShenandoahConcurrentMark::finish_mark_from_roots(bool full_gc) {
   if (_heap->process_references()) {
     weak_refs_work(full_gc);
   }
-
-  weak_roots_work();
-
-  // And finally finish class unloading
-  if (_heap->unload_classes()) {
-    _heap->unload_classes_and_cleanup_tables(full_gc);
-  } else {
-    ShenandoahIsAliveSelector alive;
-    StringTable::unlink(alive.is_alive_closure());
-  }
-  if (ShenandoahStringDedup::is_enabled()) {
-    ShenandoahIsAliveSelector alive;
-    BoolObjectClosure* is_alive = alive.is_alive_closure();
-    ShenandoahStringDedup::unlink_or_oops_do(is_alive, NULL, false);
-  }
-  assert(task_queues()->is_empty(), "Should be empty");
-  TASKQUEUE_STATS_ONLY(task_queues()->print_taskqueue_stats());
-  TASKQUEUE_STATS_ONLY(task_queues()->reset_taskqueue_stats());
-
-  // Resize Metaspace
-  MetaspaceGC::compute_new_size();
 }
 
 // Weak Reference Closures
@@ -575,26 +574,6 @@ public:
   void do_oop(oop* p)       { do_oop_work(p); }
 };
 
-class ShenandoahWeakAssertNotForwardedClosure : public OopClosure {
-private:
-  template <class T>
-  inline void do_oop_work(T* p) {
-#ifdef ASSERT
-    T o = RawAccess<>::oop_load(p);
-    if (!CompressedOops::is_null(o)) {
-      oop obj = CompressedOops::decode_not_null(o);
-      shenandoah_assert_not_forwarded(p, obj);
-    }
-#endif
-  }
-
-public:
-  ShenandoahWeakAssertNotForwardedClosure() {}
-
-  void do_oop(narrowOop* p) { do_oop_work(p); }
-  void do_oop(oop* p)       { do_oop_work(p); }
-};
-
 class ShenandoahRefProcTaskProxy : public AbstractGangTask {
 private:
   AbstractRefProcTaskExecutor::ProcessTask& _proc_task;
@@ -674,20 +653,6 @@ void ShenandoahConcurrentMark::weak_refs_work(bool full_gc) {
 
 }
 
-// Process leftover weak oops: update them, if needed or assert they do not
-// need updating otherwise.
-// Weak processor API requires us to visit the oops, even if we are not doing
-// anything to them.
-void ShenandoahConcurrentMark::weak_roots_work() {
-  OopClosure* keep_alive = &do_nothing_cl;
-#ifdef ASSERT
-  ShenandoahWeakAssertNotForwardedClosure verify_cl;
-  keep_alive = &verify_cl;
-#endif
-  ShenandoahIsAliveClosure is_alive;
-  WeakProcessor::weak_oops_do(&is_alive, keep_alive);
-}
-
 void ShenandoahConcurrentMark::weak_refs_work_doit(bool full_gc) {
   ReferenceProcessor* rp = _heap->ref_processor();
 
@@ -695,11 +660,6 @@ void ShenandoahConcurrentMark::weak_refs_work_doit(bool full_gc) {
           full_gc ?
           ShenandoahPhaseTimings::full_gc_weakrefs_process :
           ShenandoahPhaseTimings::weakrefs_process;
-
-  ShenandoahPhaseTimings::Phase phase_process_termination =
-          full_gc ?
-          ShenandoahPhaseTimings::full_gc_weakrefs_termination :
-          ShenandoahPhaseTimings::weakrefs_termination;
 
   shenandoah_assert_rp_isalive_not_installed();
   ShenandoahIsAliveSelector is_alive;
@@ -727,7 +687,6 @@ void ShenandoahConcurrentMark::weak_refs_work_doit(bool full_gc) {
 
   {
     ShenandoahGCPhase phase(phase_process);
-    ShenandoahTerminationTracker phase_term(phase_process_termination);
 
     if (_heap->has_forwarded_objects()) {
       ShenandoahCMKeepAliveUpdateClosure keep_alive(get_queue(serial_worker_id));
@@ -1003,7 +962,6 @@ void ShenandoahConcurrentMark::mark_loop_work(T* cl, jushort* live_data, uint wo
       // No work encountered in current stride, try to terminate.
       // Need to leave the STS here otherwise it might block safepoints.
       ShenandoahSuspendibleThreadSetLeaver stsl(CANCELLABLE && ShenandoahSuspendibleWorkers);
-      ShenandoahTerminationTimingsTracker term_tracker(worker_id);
       ShenandoahTerminatorTerminator tt(heap);
       if (terminator->offer_termination(&tt)) return;
     }

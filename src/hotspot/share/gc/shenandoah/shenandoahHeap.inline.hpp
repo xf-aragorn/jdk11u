@@ -136,6 +136,11 @@ inline oop ShenandoahHeap::cas_oop(oop n, oop* addr, oop c) {
   return (oop) Atomic::cmpxchg(n, addr, c);
 }
 
+inline oop ShenandoahHeap::cas_oop(oop n, narrowOop* addr, narrowOop c) {
+  narrowOop val = CompressedOops::encode(n);
+  return CompressedOops::decode((narrowOop) Atomic::cmpxchg(val, addr, c));
+}
+
 inline oop ShenandoahHeap::cas_oop(oop n, narrowOop* addr, oop c) {
   assert(is_aligned(addr, sizeof(narrowOop)), "Address should be aligned: " PTR_FORMAT, p2i(addr));
   narrowOop cmp = CompressedOops::encode(c);
@@ -219,7 +224,7 @@ inline bool ShenandoahHeap::try_cancel_gc() {
     else if (prev == CANCELLED) return false;
     assert(ShenandoahSuspendibleWorkers, "should not get here when not using suspendible workers");
     assert(prev == NOT_CANCELLED, "must be NOT_CANCELLED");
-    {
+    if (Thread::current()->is_Java_thread()) {
       // We need to provide a safepoint here, otherwise we might
       // spin forever if a SP is pending.
       ThreadBlockInVM sp(JavaThread::current());
@@ -259,6 +264,7 @@ inline oop ShenandoahHeap::evacuate_object(oop p, Thread* thread) {
   }
 
   assert(ShenandoahThreadLocalData::is_evac_allowed(thread), "must be enclosed in oom-evac scope");
+  assert(is_concurrent_traversal_in_progress() || !is_traversal_mode(), "Should not evacuate objects");
 
   size_t size = p->size();
 

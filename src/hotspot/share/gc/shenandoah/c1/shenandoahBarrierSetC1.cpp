@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Red Hat, Inc. All rights reserved.
+ * Copyright (c) 2018, 2020, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -23,6 +23,7 @@
 
 #include "precompiled.hpp"
 #include "c1/c1_IR.hpp"
+#include "gc/shenandoah/shenandoahBarrierSet.hpp"
 #include "gc/shenandoah/shenandoahBarrierSetAssembler.hpp"
 #include "gc/shenandoah/shenandoahHeap.hpp"
 #include "gc/shenandoah/shenandoahHeapRegion.hpp"
@@ -104,23 +105,25 @@ void ShenandoahBarrierSetC1::pre_barrier(LIRGenerator* gen, CodeEmitInfo* info, 
   __ branch_destination(slow->continuation());
 }
 
-LIR_Opr ShenandoahBarrierSetC1::load_reference_barrier(LIRGenerator* gen, LIR_Opr obj) {
+LIR_Opr ShenandoahBarrierSetC1::load_reference_barrier(LIRGenerator* gen, LIR_Opr obj, LIR_Opr addr) {
   if (ShenandoahLoadRefBarrier) {
-    return load_reference_barrier_impl(gen, obj);
+    return load_reference_barrier_impl(gen, obj, addr);
   } else {
     return obj;
   }
 }
 
-LIR_Opr ShenandoahBarrierSetC1::load_reference_barrier_impl(LIRGenerator* gen, LIR_Opr obj) {
+LIR_Opr ShenandoahBarrierSetC1::load_reference_barrier_impl(LIRGenerator* gen, LIR_Opr obj, LIR_Opr addr) {
   assert(ShenandoahLoadRefBarrier, "Should be enabled");
 
-  obj = ensure_in_register(gen, obj);
+  obj = ensure_in_register(gen, obj, T_OBJECT);
   assert(obj->is_register(), "must be a register at this point");
+  addr = ensure_in_register(gen, addr, T_ADDRESS);
+  assert(addr->is_register(), "must be a register at this point");
   LIR_Opr result = gen->result_register_for(obj->value_type());
   __ move(obj, result);
-  LIR_Opr tmp1 = gen->new_register(T_OBJECT);
-  LIR_Opr tmp2 = gen->new_register(T_OBJECT);
+  LIR_Opr tmp1 = gen->new_register(T_ADDRESS);
+  LIR_Opr tmp2 = gen->new_register(T_ADDRESS);
 
   LIR_Opr thrd = gen->getThreadPointer();
   LIR_Address* active_flag_addr =
@@ -145,19 +148,21 @@ LIR_Opr ShenandoahBarrierSetC1::load_reference_barrier_impl(LIRGenerator* gen, L
   }
   __ cmp(lir_cond_notEqual, flag_val, LIR_OprFact::intConst(0));
 
-  CodeStub* slow = new ShenandoahLoadReferenceBarrierStub(obj, result, tmp1, tmp2);
+  CodeStub* slow = new ShenandoahLoadReferenceBarrierStub(obj, addr, result, tmp1, tmp2);
   __ branch(lir_cond_notEqual, T_INT, slow);
   __ branch_destination(slow->continuation());
 
   return result;
 }
 
-LIR_Opr ShenandoahBarrierSetC1::ensure_in_register(LIRGenerator* gen, LIR_Opr obj) {
+LIR_Opr ShenandoahBarrierSetC1::ensure_in_register(LIRGenerator* gen, LIR_Opr obj, BasicType type) {
   if (!obj->is_register()) {
-    LIR_Opr obj_reg = gen->new_register(T_OBJECT);
+    LIR_Opr obj_reg;
     if (obj->is_constant()) {
+      obj_reg = gen->new_register(type);
       __ move(obj, obj_reg);
     } else {
+      obj_reg = gen->new_pointer_register();
       __ leal(obj, obj_reg);
     }
     obj = obj_reg;
@@ -167,7 +172,7 @@ LIR_Opr ShenandoahBarrierSetC1::ensure_in_register(LIRGenerator* gen, LIR_Opr ob
 
 LIR_Opr ShenandoahBarrierSetC1::storeval_barrier(LIRGenerator* gen, LIR_Opr obj, CodeEmitInfo* info, DecoratorSet decorators) {
   if (ShenandoahStoreValEnqueueBarrier) {
-    obj = ensure_in_register(gen, obj);
+    obj = ensure_in_register(gen, obj, T_OBJECT);
     pre_barrier(gen, info, decorators, LIR_OprFact::illegalOpr, obj);
   }
   return obj;
@@ -183,23 +188,76 @@ void ShenandoahBarrierSetC1::store_at_resolved(LIRAccess& access, LIR_Opr value)
   BarrierSetC1::store_at_resolved(access, value);
 }
 
+// TODO: This is here temporarily until backport of JDK-8217717 arrives.
+#ifndef PATCHED_ADDR
+#define PATCHED_ADDR  (max_jint)
+#endif
+static LIR_Opr resolve_address_super(LIRAccess& access, bool resolve_in_register) {
+  DecoratorSet decorators = access.decorators();
+  bool is_array = (decorators & IS_ARRAY) != 0;
+  bool needs_patching = (decorators & C1_NEEDS_PATCHING) != 0;
+
+  LIRItem& base = access.base().item();
+  LIR_Opr offset = access.offset().opr();
+  LIRGenerator *gen = access.gen();
+
+  LIR_Opr addr_opr;
+  if (is_array) {
+    addr_opr = LIR_OprFact::address(gen->emit_array_address(base.result(), offset, access.type()));
+  } else if (needs_patching) {
+    // we need to patch the offset in the instruction so don't allow
+    // generate_address to try to be smart about emitting the -1.
+    // Otherwise the patching code won't know how to find the
+    // instruction to patch.
+    addr_opr = LIR_OprFact::address(new LIR_Address(base.result(), PATCHED_ADDR, access.type()));
+  } else {
+    addr_opr = LIR_OprFact::address(gen->generate_address(base.result(), offset, 0, 0, access.type()));
+  }
+
+  if (resolve_in_register) {
+    LIR_Opr resolved_addr = gen->new_pointer_register();
+    if (needs_patching) {
+      __ leal(addr_opr, resolved_addr, lir_patch_normal, access.patch_emit_info());
+      access.clear_decorators(C1_NEEDS_PATCHING);
+    } else {
+      __ leal(addr_opr, resolved_addr);
+    }
+    return LIR_OprFact::address(new LIR_Address(resolved_addr, access.type()));
+  } else {
+    return addr_opr;
+  }
+}
+
+LIR_Opr ShenandoahBarrierSetC1::resolve_address(LIRAccess& access, bool resolve_in_register) {
+  // We must resolve in register when patching. This is to avoid
+  // having a patch area in the load barrier stub, since the call
+  // into the runtime to patch will not have the proper oop map.
+  const bool patch_before_barrier = access.is_oop() && (access.decorators() & C1_NEEDS_PATCHING) != 0;
+  return resolve_address_super(access, resolve_in_register || patch_before_barrier);
+}
+
 void ShenandoahBarrierSetC1::load_at_resolved(LIRAccess& access, LIR_Opr result) {
+  // 1: non-reference load, no additional barrier is needed
   if (!access.is_oop()) {
     BarrierSetC1::load_at_resolved(access, result);
     return;
   }
 
-  LIRGenerator *gen = access.gen();
+  LIRGenerator* gen = access.gen();
+  DecoratorSet decorators = access.decorators();
+  BasicType type = access.type();
 
-  if (ShenandoahLoadRefBarrier) {
+  // 2: load a reference from src location and apply LRB if ShenandoahLoadRefBarrier is set
+  if (ShenandoahBarrierSet::need_load_reference_barrier(decorators, type)) {
     LIR_Opr tmp = gen->new_register(T_OBJECT);
     BarrierSetC1::load_at_resolved(access, tmp);
-    tmp = load_reference_barrier(access.gen(), tmp);
+    tmp = load_reference_barrier(gen, tmp, access.resolved_addr());
     __ move(tmp, result);
   } else {
     BarrierSetC1::load_at_resolved(access, result);
   }
 
+  // 3: apply keep-alive barrier if ShenandoahKeepAliveBarrier is set
   if (ShenandoahKeepAliveBarrier) {
     DecoratorSet decorators = access.decorators();
     bool is_weak = (decorators & ON_WEAK_OOP_REF) != 0;
@@ -212,13 +270,13 @@ void ShenandoahBarrierSetC1::load_at_resolved(LIRAccess& access, LIR_Opr result)
         Lcont_anonymous = new LabelObj();
         generate_referent_check(access, Lcont_anonymous);
       }
-      pre_barrier(access.gen(), access.access_emit_info(), access.decorators(), LIR_OprFact::illegalOpr /* addr_opr */,
+      pre_barrier(gen, access.access_emit_info(), decorators, LIR_OprFact::illegalOpr /* addr_opr */,
                   result /* pre_val */);
       if (is_anonymous) {
         __ branch_destination(Lcont_anonymous->label());
       }
     }
-  }
+ }
 }
 
 class C1ShenandoahPreBarrierCodeGenClosure : public StubAssemblerCodeGenClosure {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Red Hat, Inc. All rights reserved.
+ * Copyright (c) 2019, 2020, Red Hat, Inc. All rights reserved.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -25,6 +25,7 @@
 #define SHARE_GC_SHENANDOAH_SHENANDOAHROOTPROCESSOR_INLINE_HPP
 
 #include "classfile/stringTable.hpp"
+#include "gc/shared/oopStorageParState.inline.hpp"
 #include "gc/shenandoah/shenandoahHeuristics.hpp"
 #include "gc/shenandoah/shenandoahRootProcessor.hpp"
 #include "gc/shenandoah/shenandoahTimingTracker.hpp"
@@ -36,7 +37,8 @@ void ShenandoahWeakRoots::oops_do(IsAlive* is_alive, KeepAlive* keep_alive, uint
   if (!_claimed && Atomic::cmpxchg(true, &_claimed, false) == false) {
     WeakProcessor::weak_oops_do(is_alive, keep_alive);
   }
-  StringTable::possibly_parallel_oops_do(&_par_state_string, keep_alive);
+
+  _par_state_string.weak_oops_do<IsAlive, KeepAlive>(is_alive, keep_alive);
 }
 
 template <bool SINGLE_THREADED>
@@ -151,6 +153,9 @@ void ShenandoahRootScanner<ITR>::roots_do(uint worker_id, OopClosure* oops, CLDC
   if (code != NULL && !ShenandoahConcurrentScanCodeRoots) {
     _code_roots.code_blobs_do(code, worker_id);
   }
+
+  AlwaysTrueClosure always_true;
+  _dedup_roots.oops_do(&always_true, oops, worker_id);
 }
 
 template <typename ITR>
