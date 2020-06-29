@@ -26,9 +26,10 @@
 
 #include "classfile/stringTable.hpp"
 #include "gc/shared/oopStorageParState.inline.hpp"
-#include "gc/shenandoah/shenandoahHeuristics.hpp"
+#include "gc/shenandoah/shenandoahHeap.inline.hpp"
+#include "gc/shenandoah/shenandoahPhaseTimings.hpp"
 #include "gc/shenandoah/shenandoahRootProcessor.hpp"
-#include "gc/shenandoah/shenandoahTimingTracker.hpp"
+#include "gc/shenandoah/heuristics/shenandoahHeuristics.hpp"
 #include "memory/resourceArea.hpp"
 #include "runtime/safepoint.hpp"
 
@@ -42,7 +43,8 @@ void ShenandoahWeakRoots::oops_do(IsAlive* is_alive, KeepAlive* keep_alive, uint
 }
 
 template <bool SINGLE_THREADED>
-ShenandoahClassLoaderDataRoots<SINGLE_THREADED>::ShenandoahClassLoaderDataRoots() {
+ShenandoahClassLoaderDataRoots<SINGLE_THREADED>::ShenandoahClassLoaderDataRoots(ShenandoahPhaseTimings::Phase phase) :
+  _phase(phase) {
   if (!SINGLE_THREADED) {
     ClassLoaderDataGraph::clear_claimed_marks();
   }
@@ -55,8 +57,7 @@ void ShenandoahClassLoaderDataRoots<SINGLE_THREADED>::always_strong_cld_do(CLDCl
     assert(Thread::current()->is_VM_thread(), "Single threaded CLDG iteration can only be done by VM thread");
     ClassLoaderDataGraph::always_strong_cld_do(clds);
   } else {
-   ShenandoahWorkerTimings* worker_times = ShenandoahHeap::heap()->phase_timings()->worker_times();
-   ShenandoahWorkerTimingsTracker timer(worker_times, ShenandoahPhaseTimings::CLDGRoots, worker_id);
+   ShenandoahWorkerTimingsTracker timer(_phase, ShenandoahPhaseTimings::CLDGRoots, worker_id);
    ClassLoaderDataGraph::always_strong_cld_do(clds);
   }
 }
@@ -68,21 +69,19 @@ void ShenandoahClassLoaderDataRoots<SINGLE_THREADED>::cld_do(CLDClosure* clds, u
     assert(Thread::current()->is_VM_thread(), "Single threaded CLDG iteration can only be done by VM thread");
     ClassLoaderDataGraph::cld_do(clds);
   } else {
-    ShenandoahWorkerTimings* worker_times = ShenandoahHeap::heap()->phase_timings()->worker_times();
-    ShenandoahWorkerTimingsTracker timer(worker_times, ShenandoahPhaseTimings::CLDGRoots, worker_id);
+    ShenandoahWorkerTimingsTracker timer(_phase, ShenandoahPhaseTimings::CLDGRoots, worker_id);
     ClassLoaderDataGraph::cld_do(clds);
   }
 }
 
 template <typename ITR>
-ShenandoahCodeCacheRoots<ITR>::ShenandoahCodeCacheRoots() {
+ShenandoahCodeCacheRoots<ITR>::ShenandoahCodeCacheRoots(ShenandoahPhaseTimings::Phase phase) : _phase(phase) {
   nmethod::oops_do_marking_prologue();
 }
 
 template <typename ITR>
 void ShenandoahCodeCacheRoots<ITR>::code_blobs_do(CodeBlobClosure* blob_cl, uint worker_id) {
-  ShenandoahWorkerTimings* worker_times = ShenandoahHeap::heap()->phase_timings()->worker_times();
-  ShenandoahWorkerTimingsTracker timer(worker_times, ShenandoahPhaseTimings::CodeCacheRoots, worker_id);
+  ShenandoahWorkerTimingsTracker timer(_phase, ShenandoahPhaseTimings::CodeCacheRoots, worker_id);
   _coderoots_iterator.possibly_parallel_blobs_do(blob_cl);
 }
 
@@ -111,7 +110,12 @@ public:
 template <typename ITR>
 ShenandoahRootScanner<ITR>::ShenandoahRootScanner(uint n_workers, ShenandoahPhaseTimings::Phase phase) :
   ShenandoahRootProcessor(phase),
-  _thread_roots(n_workers > 1) {
+  _serial_roots(phase),
+  _thread_roots(phase, n_workers > 1),
+  _code_roots(phase),
+  _jni_roots(phase),
+  _dedup_roots(phase),
+  _cld_roots(phase) {
 }
 
 template <typename ITR>
@@ -130,28 +134,26 @@ void ShenandoahRootScanner<ITR>::strong_roots_do(uint worker_id, OopClosure* oop
 
 template <typename ITR>
 void ShenandoahRootScanner<ITR>::roots_do(uint worker_id, OopClosure* oops, CLDClosure* clds, CodeBlobClosure* code, ThreadClosure *tc) {
-  assert(!ShenandoahHeap::heap()->unload_classes() ||
-          ShenandoahHeap::heap()->is_traversal_mode(),
-          "No class unloading or traversal GC");
-  ShenandoahParallelOopsDoThreadClosure tc_cl(oops, code, tc);
+  assert(!ShenandoahHeap::heap()->unload_classes(),
+          "Expect class unloading when Shenandoah cycle is running");
   ResourceMark rm;
 
   _serial_roots.oops_do(oops, worker_id);
   _jni_roots.oops_do(oops, worker_id);
 
-  if (clds != NULL) {
-    _cld_roots.cld_do(clds, worker_id);
-  } else {
-    assert(ShenandoahHeap::heap()->is_concurrent_traversal_in_progress(), "Only possible with traversal GC");
-  }
-
-  _thread_roots.threads_do(&tc_cl, worker_id);
+  assert(clds != NULL, "Only possible with CLD closure");
+  _cld_roots.cld_do(clds, worker_id);
 
   // With ShenandoahConcurrentScanCodeRoots, we avoid scanning the entire code cache here,
   // and instead do that in concurrent phase under the relevant lock. This saves init mark
   // pause time.
   if (code != NULL && !ShenandoahConcurrentScanCodeRoots) {
     _code_roots.code_blobs_do(code, worker_id);
+    ShenandoahParallelOopsDoThreadClosure tc_cl(oops, NULL, tc);
+    _thread_roots.threads_do(&tc_cl, worker_id);
+  } else {
+    ShenandoahParallelOopsDoThreadClosure tc_cl(oops, code, tc);
+    _thread_roots.threads_do(&tc_cl, worker_id);
   }
 
   AlwaysTrueClosure always_true;

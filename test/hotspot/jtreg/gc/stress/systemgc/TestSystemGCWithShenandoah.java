@@ -48,7 +48,7 @@
  * @summary Stress the Shenandoah GC full GC by allocating objects of different lifetimes concurrently with System.gc().
  *
  * @run main/othervm/timeout=300 -Xlog:gc*=info -Xmx512m -XX:+UnlockExperimentalVMOptions -XX:+UnlockDiagnosticVMOptions
- *      -XX:+UseShenandoahGC -XX:ShenandoahGCMode=traversal
+ *      -XX:+UseShenandoahGC -XX:ShenandoahGCMode=iu
  *      -XX:+ShenandoahVerify
  *      TestSystemGCWithShenandoah 270
  *

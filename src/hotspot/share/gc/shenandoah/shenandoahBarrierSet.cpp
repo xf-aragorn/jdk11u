@@ -28,8 +28,7 @@
 #include "gc/shenandoah/shenandoahBarrierSetAssembler.hpp"
 #include "gc/shenandoah/shenandoahCollectorPolicy.hpp"
 #include "gc/shenandoah/shenandoahHeap.inline.hpp"
-#include "gc/shenandoah/shenandoahHeuristics.hpp"
-#include "gc/shenandoah/shenandoahTraversalGC.hpp"
+#include "gc/shenandoah/heuristics/shenandoahHeuristics.hpp"
 #include "memory/iterator.inline.hpp"
 #include "runtime/interfaceSupport.inline.hpp"
 #ifdef COMPILER1
@@ -86,14 +85,6 @@ oop ShenandoahBarrierSet::load_reference_barrier(oop obj) {
   }
 }
 
-oop ShenandoahBarrierSet::load_reference_barrier_mutator(oop obj, oop* load_addr) {
-  return load_reference_barrier_mutator_work(obj, load_addr);
-}
-
-oop ShenandoahBarrierSet::load_reference_barrier_mutator(oop obj, narrowOop* load_addr) {
-  return load_reference_barrier_mutator_work(obj, load_addr);
-}
-
 bool ShenandoahBarrierSet::need_load_reference_barrier(DecoratorSet decorators, BasicType type) {
   if (!ShenandoahLoadRefBarrier) return false;
   // Only needed for references
@@ -101,43 +92,20 @@ bool ShenandoahBarrierSet::need_load_reference_barrier(DecoratorSet decorators, 
 }
 
 bool ShenandoahBarrierSet::need_keep_alive_barrier(DecoratorSet decorators,BasicType type) {
-  if (!ShenandoahKeepAliveBarrier) return false;
+  if (!ShenandoahSATBBarrier) return false;
   // Only needed for references
   if (!is_reference_type(type)) return false;
 
   bool keep_alive = (decorators & AS_NO_KEEPALIVE) == 0;
   bool unknown = (decorators & ON_UNKNOWN_OOP_REF) != 0;
-  bool is_traversal_mode = ShenandoahHeap::heap()->is_traversal_mode();
   bool on_weak_ref = (decorators & (ON_WEAK_OOP_REF | ON_PHANTOM_OOP_REF)) != 0;
-  return (on_weak_ref || unknown) && (keep_alive || is_traversal_mode);
-}
-
-template <class T>
-oop ShenandoahBarrierSet::load_reference_barrier_mutator_work(oop obj, T* load_addr) {
-  assert(ShenandoahLoadRefBarrier, "should be enabled");
-  shenandoah_assert_in_cset(load_addr, obj);
-
-  oop fwd = resolve_forwarded_not_null(obj);
-  if (obj == fwd) {
-    assert(_heap->is_gc_in_progress_mask(ShenandoahHeap::EVACUATION | ShenandoahHeap::TRAVERSAL),
-           "evac should be in progress");
-
-    ShenandoahEvacOOMScope scope;
-    fwd = _heap->evacuate_object(obj, Thread::current());
-  }
-
-  if (load_addr != NULL && fwd != obj) {
-    // Since we are here and we know the load address, update the reference.
-    ShenandoahHeap::cas_oop(fwd, load_addr, obj);
-  }
-
-  return fwd;
+  return (on_weak_ref || unknown) && keep_alive;
 }
 
 oop ShenandoahBarrierSet::load_reference_barrier_impl(oop obj) {
   assert(ShenandoahLoadRefBarrier, "should be enabled");
   if (!CompressedOops::is_null(obj)) {
-    bool evac_in_progress = _heap->is_gc_in_progress_mask(ShenandoahHeap::EVACUATION | ShenandoahHeap::TRAVERSAL);
+    bool evac_in_progress = _heap->is_evacuation_in_progress();
     oop fwd = resolve_forwarded_not_null(obj);
     if (evac_in_progress &&
         _heap->in_collection_set(obj) &&
@@ -183,7 +151,7 @@ void ShenandoahBarrierSet::on_thread_detach(JavaThread* thread) {
 }
 
 void ShenandoahBarrierSet::clone_barrier_runtime(oop src) {
-  if (_heap->has_forwarded_objects()) {
+  if (_heap->has_forwarded_objects() || (ShenandoahStoreValEnqueueBarrier && _heap->is_concurrent_mark_in_progress())) {
     clone_barrier(src);
   }
 }

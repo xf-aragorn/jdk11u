@@ -29,6 +29,7 @@
 
 #include "gc/shared/weakProcessor.hpp"
 #include "gc/shared/gcTimer.hpp"
+#include "gc/shared/gcTrace.hpp"
 #include "gc/shared/referenceProcessor.hpp"
 #include "gc/shared/referenceProcessorPhaseTimes.hpp"
 
@@ -39,8 +40,8 @@
 #include "gc/shenandoah/shenandoahHeap.inline.hpp"
 #include "gc/shenandoah/shenandoahRootProcessor.inline.hpp"
 #include "gc/shenandoah/shenandoahOopClosures.inline.hpp"
+#include "gc/shenandoah/shenandoahPhaseTimings.hpp"
 #include "gc/shenandoah/shenandoahTaskqueue.inline.hpp"
-#include "gc/shenandoah/shenandoahTimingTracker.hpp"
 #include "gc/shenandoah/shenandoahUtils.hpp"
 #include "gc/shared/weakProcessor.hpp"
 
@@ -82,12 +83,10 @@ template<UpdateRefsMode UPDATE_REFS>
 class ShenandoahInitMarkRootsTask : public AbstractGangTask {
 private:
   ShenandoahAllRootScanner* _rp;
-  bool _process_refs;
 public:
-  ShenandoahInitMarkRootsTask(ShenandoahAllRootScanner* rp, bool process_refs) :
+  ShenandoahInitMarkRootsTask(ShenandoahAllRootScanner* rp) :
     AbstractGangTask("Shenandoah init mark roots task"),
-    _rp(rp),
-    _process_refs(process_refs) {
+    _rp(rp) {
   }
 
   void work(uint worker_id) {
@@ -176,12 +175,13 @@ public:
 class ShenandoahSATBAndRemarkCodeRootsThreadsClosure : public ThreadClosure {
 private:
   ShenandoahConcMarkSATBBufferClosure* _satb_cl;
+  OopClosure*                    const _cl;
   MarkingCodeBlobClosure*              _code_cl;
   int _thread_parity;
 
 public:
-  ShenandoahSATBAndRemarkCodeRootsThreadsClosure(ShenandoahConcMarkSATBBufferClosure* satb_cl, MarkingCodeBlobClosure* code_cl) :
-    _satb_cl(satb_cl), _code_cl(code_cl),
+  ShenandoahSATBAndRemarkCodeRootsThreadsClosure(ShenandoahConcMarkSATBBufferClosure* satb_cl, OopClosure* cl, MarkingCodeBlobClosure* code_cl) :
+    _satb_cl(satb_cl), _cl(cl), _code_cl(code_cl),
     _thread_parity(Threads::thread_claim_parity()) {}
 
   void do_thread(Thread* thread) {
@@ -189,14 +189,16 @@ public:
       if (thread->claim_oops_do(true, _thread_parity)) {
         JavaThread* jt = (JavaThread*)thread;
         ShenandoahThreadLocalData::satb_mark_queue(jt).apply_closure_and_empty(_satb_cl);
-        if (_code_cl != NULL && thread->is_Java_thread()) {
+        if (_cl != NULL) {
+          ResourceMark rm;
+          jt->oops_do(_cl, _code_cl);
+        } else if (_code_cl != NULL) {
           // In theory it should not be neccessary to explicitly walk the nmethods to find roots for concurrent marking
           // however the liveness of oops reachable from nmethods have very complex lifecycles:
           // * Alive if on the stack of an executing method
           // * Weakly reachable otherwise
           // Some objects reachable from nmethods, such as the class loader (or klass_holder) of the receiver should be
           // live by the SATB invariant but other oops recorded in nmethods may behave differently.
-          JavaThread* jt = (JavaThread*)thread;
           jt->nmethods_do(_code_cl);
         }
       }
@@ -241,21 +243,21 @@ public:
       ShenandoahConcMarkSATBBufferClosure cl(q);
       ShenandoahSATBMarkQueueSet& satb_mq_set = ShenandoahBarrierSet::satb_mark_queue_set();
       while (satb_mq_set.apply_closure_to_completed_buffer(&cl));
-      if (heap->unload_classes()) {
-        if (heap->has_forwarded_objects()) {
-          ShenandoahMarkResolveRefsClosure resolve_mark_cl(q, rp);
-          MarkingCodeBlobClosure blobsCl(&resolve_mark_cl, !CodeBlobToOopClosure::FixRelocations);
-          ShenandoahSATBAndRemarkCodeRootsThreadsClosure tc(&cl, &blobsCl);
+      bool do_nmethods = heap->unload_classes();
+      if (heap->has_forwarded_objects()) {
+        ShenandoahMarkResolveRefsClosure resolve_mark_cl(q, rp);
+        MarkingCodeBlobClosure blobsCl(&resolve_mark_cl, !CodeBlobToOopClosure::FixRelocations);
+        ShenandoahSATBAndRemarkCodeRootsThreadsClosure tc(&cl,
+                                                          ShenandoahStoreValEnqueueBarrier ? &resolve_mark_cl : NULL,
+                                                          do_nmethods ? &blobsCl : NULL);
           Threads::threads_do(&tc);
-        } else {
-          ShenandoahMarkRefsClosure mark_cl(q, rp);
-          MarkingCodeBlobClosure blobsCl(&mark_cl, !CodeBlobToOopClosure::FixRelocations);
-          ShenandoahSATBAndRemarkCodeRootsThreadsClosure tc(&cl, &blobsCl);
-          Threads::threads_do(&tc);
-        }
       } else {
-        ShenandoahSATBAndRemarkCodeRootsThreadsClosure tc(&cl, NULL);
-        Threads::threads_do(&tc);
+        ShenandoahMarkRefsClosure mark_cl(q, rp);
+        MarkingCodeBlobClosure blobsCl(&mark_cl, !CodeBlobToOopClosure::FixRelocations);
+        ShenandoahSATBAndRemarkCodeRootsThreadsClosure tc(&cl,
+                                                          ShenandoahStoreValEnqueueBarrier ? &mark_cl : NULL,
+                                                          do_nmethods ? &blobsCl : NULL);
+         Threads::threads_do(&tc);
       }
     }
 
@@ -291,12 +293,12 @@ void ShenandoahConcurrentMark::mark_roots(ShenandoahPhaseTimings::Phase root_pha
   task_queues()->reserve(nworkers);
 
   if (heap->has_forwarded_objects()) {
-    ShenandoahInitMarkRootsTask<RESOLVE> mark_roots(&root_proc, _heap->process_references());
+    ShenandoahInitMarkRootsTask<RESOLVE> mark_roots(&root_proc);
     workers->run_task(&mark_roots);
   } else {
     // No need to update references, which means the heap is stable.
     // Can save time not walking through forwarding pointers.
-    ShenandoahInitMarkRootsTask<NONE> mark_roots(&root_proc, _heap->process_references());
+    ShenandoahInitMarkRootsTask<NONE> mark_roots(&root_proc);
     workers->run_task(&mark_roots);
   }
 
@@ -314,7 +316,8 @@ void ShenandoahConcurrentMark::update_roots(ShenandoahPhaseTimings::Phase root_p
     case ShenandoahPhaseTimings::final_update_refs_roots:
       update_code_cache = false;
       break;
-    case ShenandoahPhaseTimings::full_gc_roots:
+    case ShenandoahPhaseTimings::full_gc_update_roots:
+    case ShenandoahPhaseTimings::full_gc_adjust_roots:
     case ShenandoahPhaseTimings::degen_gc_update_roots:
       update_code_cache = true;
       break;
@@ -343,17 +346,14 @@ class ShenandoahUpdateThreadRootsTask : public AbstractGangTask {
 private:
   ShenandoahThreadRoots           _thread_roots;
   ShenandoahPhaseTimings::Phase   _phase;
+  ShenandoahGCWorkerPhase         _worker_phase;
 public:
   ShenandoahUpdateThreadRootsTask(bool is_par, ShenandoahPhaseTimings::Phase phase) :
     AbstractGangTask("Shenandoah Update Thread Roots"),
-    _thread_roots(is_par),
-    _phase(phase) {
-    ShenandoahHeap::heap()->phase_timings()->record_workers_start(_phase);
-  }
+    _thread_roots(phase, is_par),
+    _phase(phase),
+    _worker_phase(phase) {}
 
-  ~ShenandoahUpdateThreadRootsTask() {
-    ShenandoahHeap::heap()->phase_timings()->record_workers_end(_phase);
-  }
   void work(uint worker_id) {
     ShenandoahUpdateRefsClosure cl;
     _thread_roots.oops_do(&cl, NULL, worker_id);
@@ -419,8 +419,6 @@ void ShenandoahConcurrentMark::concurrent_scan_code_roots(uint worker_id, Refere
 void ShenandoahConcurrentMark::mark_from_roots() {
   WorkGang* workers = _heap->workers();
   uint nworkers = workers->active_workers();
-
-  ShenandoahGCPhase conc_mark_phase(ShenandoahPhaseTimings::conc_mark);
 
   if (_heap->process_references()) {
     ReferenceProcessor* rp = _heap->ref_processor();
@@ -690,16 +688,18 @@ void ShenandoahConcurrentMark::weak_refs_work_doit(bool full_gc) {
 
     if (_heap->has_forwarded_objects()) {
       ShenandoahCMKeepAliveUpdateClosure keep_alive(get_queue(serial_worker_id));
-      rp->process_discovered_references(is_alive.is_alive_closure(), &keep_alive,
-                                        &complete_gc, &executor,
-                                        &pt);
-
+      const ReferenceProcessorStats& stats =
+        rp->process_discovered_references(is_alive.is_alive_closure(), &keep_alive,
+                                          &complete_gc, &executor,
+                                          &pt);
+       _heap->tracer()->report_gc_reference_stats(stats);
     } else {
       ShenandoahCMKeepAliveClosure keep_alive(get_queue(serial_worker_id));
-      rp->process_discovered_references(is_alive.is_alive_closure(), &keep_alive,
-                                        &complete_gc, &executor,
-                                        &pt);
-
+      const ReferenceProcessorStats& stats =
+        rp->process_discovered_references(is_alive.is_alive_closure(), &keep_alive,
+                                          &complete_gc, &executor,
+                                          &pt);
+      _heap->tracer()->report_gc_reference_stats(stats);
     }
 
     pt.print_all_references();
@@ -733,27 +733,6 @@ public:
   }
 };
 
-class ShenandoahPrecleanKeepAliveUpdateClosure : public OopClosure {
-private:
-  ShenandoahObjToScanQueue* _queue;
-  ShenandoahHeap* _heap;
-  ShenandoahMarkingContext* const _mark_context;
-
-  template <class T>
-  inline void do_oop_work(T* p) {
-    ShenandoahConcurrentMark::mark_through_ref<T, CONCURRENT, NO_DEDUP>(p, _heap, _queue, _mark_context);
-  }
-
-public:
-  ShenandoahPrecleanKeepAliveUpdateClosure(ShenandoahObjToScanQueue* q) :
-    _queue(q),
-    _heap(ShenandoahHeap::heap()),
-    _mark_context(_heap->marking_context()) {}
-
-  void do_oop(narrowOop* p) { do_oop_work(p); }
-  void do_oop(oop* p)       { do_oop_work(p); }
-};
-
 class ShenandoahPrecleanTask : public AbstractGangTask {
 private:
   ReferenceProcessor* _rp;
@@ -768,27 +747,19 @@ public:
     ShenandoahParallelWorkerSession worker_session(worker_id);
 
     ShenandoahHeap* sh = ShenandoahHeap::heap();
+    assert(!sh->has_forwarded_objects(), "No forwarded objects expected here");
 
     ShenandoahObjToScanQueue* q = sh->concurrent_mark()->get_queue(worker_id);
 
     ShenandoahCancelledGCYieldClosure yield;
     ShenandoahPrecleanCompleteGCClosure complete_gc;
 
-    if (sh->has_forwarded_objects()) {
-      ShenandoahForwardedIsAliveClosure is_alive;
-      ShenandoahPrecleanKeepAliveUpdateClosure keep_alive(q);
-      ResourceMark rm;
-      _rp->preclean_discovered_references(&is_alive, &keep_alive,
-                                          &complete_gc, &yield,
-                                          NULL);
-    } else {
-      ShenandoahIsAliveClosure is_alive;
-      ShenandoahCMKeepAliveClosure keep_alive(q);
-      ResourceMark rm;
-      _rp->preclean_discovered_references(&is_alive, &keep_alive,
-                                          &complete_gc, &yield,
-                                          NULL);
-    }
+    ShenandoahIsAliveClosure is_alive;
+    ShenandoahCMKeepAliveClosure keep_alive(q);
+    ResourceMark rm;
+    _rp->preclean_discovered_references(&is_alive, &keep_alive,
+                                        &complete_gc, &yield,
+                                        NULL);
   }
 };
 
@@ -849,7 +820,7 @@ void ShenandoahConcurrentMark::mark_loop_prework(uint w, ShenandoahTaskTerminato
                                                  bool strdedup) {
   ShenandoahObjToScanQueue* q = get_queue(w);
 
-  jushort* ld = _heap->get_liveness_cache(w);
+  ShenandoahLiveData* ld = _heap->get_liveness_cache(w);
 
   // TODO: We can clean up this if we figure out how to do templated oop closures that
   // play nice with specialized_oop_iterators.
@@ -895,7 +866,7 @@ void ShenandoahConcurrentMark::mark_loop_prework(uint w, ShenandoahTaskTerminato
 }
 
 template <class T, bool CANCELLABLE>
-void ShenandoahConcurrentMark::mark_loop_work(T* cl, jushort* live_data, uint worker_id, ShenandoahTaskTerminator *terminator) {
+void ShenandoahConcurrentMark::mark_loop_work(T* cl, ShenandoahLiveData* live_data, uint worker_id, ShenandoahTaskTerminator *terminator) {
   int seed = 17;
   uintx stride = ShenandoahMarkLoopStride;
 
