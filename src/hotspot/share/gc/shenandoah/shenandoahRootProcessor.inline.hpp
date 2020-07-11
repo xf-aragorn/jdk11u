@@ -43,7 +43,8 @@ void ShenandoahWeakRoots::oops_do(IsAlive* is_alive, KeepAlive* keep_alive, uint
 }
 
 template <bool SINGLE_THREADED>
-ShenandoahClassLoaderDataRoots<SINGLE_THREADED>::ShenandoahClassLoaderDataRoots(ShenandoahPhaseTimings::Phase phase) :
+ShenandoahClassLoaderDataRoots<SINGLE_THREADED>::ShenandoahClassLoaderDataRoots(ShenandoahPhaseTimings::Phase phase, uint n_workers) :
+  _semaphore(worker_count(n_workers)),
   _phase(phase) {
   if (!SINGLE_THREADED) {
     ClassLoaderDataGraph::clear_claimed_marks();
@@ -56,9 +57,10 @@ void ShenandoahClassLoaderDataRoots<SINGLE_THREADED>::always_strong_cld_do(CLDCl
     assert(SafepointSynchronize::is_at_safepoint(), "Must be at a safepoint");
     assert(Thread::current()->is_VM_thread(), "Single threaded CLDG iteration can only be done by VM thread");
     ClassLoaderDataGraph::always_strong_cld_do(clds);
-  } else {
-   ShenandoahWorkerTimingsTracker timer(_phase, ShenandoahPhaseTimings::CLDGRoots, worker_id);
-   ClassLoaderDataGraph::always_strong_cld_do(clds);
+  } else if (_semaphore.try_acquire()) {
+    ShenandoahWorkerTimingsTracker timer(_phase, ShenandoahPhaseTimings::CLDGRoots, worker_id);
+    ClassLoaderDataGraph::always_strong_cld_do(clds);
+    _semaphore.claim_all();
   }
 }
 
@@ -68,9 +70,10 @@ void ShenandoahClassLoaderDataRoots<SINGLE_THREADED>::cld_do(CLDClosure* clds, u
     assert(SafepointSynchronize::is_at_safepoint(), "Must be at a safepoint");
     assert(Thread::current()->is_VM_thread(), "Single threaded CLDG iteration can only be done by VM thread");
     ClassLoaderDataGraph::cld_do(clds);
-  } else {
+  } else if (_semaphore.try_acquire()) {
     ShenandoahWorkerTimingsTracker timer(_phase, ShenandoahPhaseTimings::CLDGRoots, worker_id);
     ClassLoaderDataGraph::cld_do(clds);
+    _semaphore.claim_all();
   }
 }
 
@@ -115,7 +118,7 @@ ShenandoahRootScanner<ITR>::ShenandoahRootScanner(uint n_workers, ShenandoahPhas
   _code_roots(phase),
   _jni_roots(phase),
   _dedup_roots(phase),
-  _cld_roots(phase) {
+  _cld_roots(phase, n_workers) {
 }
 
 template <typename ITR>
@@ -136,28 +139,23 @@ template <typename ITR>
 void ShenandoahRootScanner<ITR>::roots_do(uint worker_id, OopClosure* oops, CLDClosure* clds, CodeBlobClosure* code, ThreadClosure *tc) {
   assert(!ShenandoahHeap::heap()->unload_classes(),
           "Expect class unloading when Shenandoah cycle is running");
+  assert(clds != NULL, "Only possible with CLD closure");
+
+  AlwaysTrueClosure always_true;
+  ShenandoahParallelOopsDoThreadClosure tc_cl(oops, code, tc);
+
   ResourceMark rm;
 
+  // Process serial-claiming roots first
   _serial_roots.oops_do(oops, worker_id);
   _jni_roots.oops_do(oops, worker_id);
 
-  assert(clds != NULL, "Only possible with CLD closure");
+  // Process light-weight/limited parallel roots then
+  _dedup_roots.oops_do(&always_true, oops, worker_id);
   _cld_roots.cld_do(clds, worker_id);
 
-  // With ShenandoahConcurrentScanCodeRoots, we avoid scanning the entire code cache here,
-  // and instead do that in concurrent phase under the relevant lock. This saves init mark
-  // pause time.
-  if (code != NULL && !ShenandoahConcurrentScanCodeRoots) {
-    _code_roots.code_blobs_do(code, worker_id);
-    ShenandoahParallelOopsDoThreadClosure tc_cl(oops, NULL, tc);
-    _thread_roots.threads_do(&tc_cl, worker_id);
-  } else {
-    ShenandoahParallelOopsDoThreadClosure tc_cl(oops, code, tc);
-    _thread_roots.threads_do(&tc_cl, worker_id);
-  }
-
-  AlwaysTrueClosure always_true;
-  _dedup_roots.oops_do(&always_true, oops, worker_id);
+  // Process heavy-weight/fully parallel roots the last
+  _thread_roots.threads_do(&tc_cl, worker_id);
 }
 
 template <typename ITR>
@@ -166,9 +164,14 @@ void ShenandoahRootScanner<ITR>::strong_roots_do(uint worker_id, OopClosure* oop
   ShenandoahParallelOopsDoThreadClosure tc_cl(oops, code, tc);
   ResourceMark rm;
 
+  // Process serial-claiming roots first
   _serial_roots.oops_do(oops, worker_id);
   _jni_roots.oops_do(oops, worker_id);
+
+  // Process light-weight/limited parallel roots then
   _cld_roots.always_strong_cld_do(clds, worker_id);
+
+  // Process heavy-weight/fully parallel roots the last
   _thread_roots.threads_do(&tc_cl, worker_id);
 }
 
@@ -177,18 +180,20 @@ void ShenandoahRootUpdater::roots_do(uint worker_id, IsAlive* is_alive, KeepAliv
   CodeBlobToOopClosure update_blobs(keep_alive, CodeBlobToOopClosure::FixRelocations);
   CLDToOopClosure clds(keep_alive);
 
+  // Process serial-claiming roots first
   _serial_roots.oops_do(keep_alive, worker_id);
   _jni_roots.oops_do(keep_alive, worker_id);
 
-  _thread_roots.oops_do(keep_alive, NULL, worker_id);
+  // Process light-weight/limited parallel roots then
+  _weak_roots.oops_do<IsAlive, KeepAlive>(is_alive, keep_alive, worker_id);
+  _dedup_roots.oops_do(is_alive, keep_alive, worker_id);
   _cld_roots.cld_do(&clds, worker_id);
 
+  // Process heavy-weight/fully parallel roots the last
   if(_update_code_cache) {
     _code_roots.code_blobs_do(&update_blobs, worker_id);
   }
-
-  _weak_roots.oops_do<IsAlive, KeepAlive>(is_alive, keep_alive, worker_id);
-  _dedup_roots.oops_do(is_alive, keep_alive, worker_id);
+  _thread_roots.oops_do(keep_alive, NULL, worker_id);
 }
 
 #endif // SHARE_GC_SHENANDOAH_SHENANDOAHROOTPROCESSOR_INLINE_HPP

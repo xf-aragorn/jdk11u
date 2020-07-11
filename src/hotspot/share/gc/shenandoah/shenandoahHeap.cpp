@@ -98,7 +98,9 @@ public:
   virtual void work(uint worker_id) {
     ShenandoahHeapRegion* r = _regions.next();
     while (r != NULL) {
-      os::pretouch_memory(r->bottom(), r->end(), _page_size);
+      if (r->is_committed()) {
+        os::pretouch_memory(r->bottom(), r->end(), _page_size);
+      }
       r = _regions.next();
     }
   }
@@ -124,7 +126,9 @@ public:
       size_t end   = (r->index() + 1) * ShenandoahHeapRegion::region_size_bytes() / MarkBitMap::heap_map_factor();
       assert (end <= _bitmap_size, "end is sane: " SIZE_FORMAT " < " SIZE_FORMAT, end, _bitmap_size);
 
-      os::pretouch_memory(_bitmap_base + start, _bitmap_base + end, _page_size);
+      if (r->is_committed()) {
+        os::pretouch_memory(_bitmap_base + start, _bitmap_base + end, _page_size);
+      }
 
       r = _regions.next();
     }
@@ -142,11 +146,6 @@ jint ShenandoahHeap::initialize() {
   size_t heap_alignment = collector_policy()->heap_alignment();
 
   size_t reg_size_bytes = ShenandoahHeapRegion::region_size_bytes();
-
-  if (ShenandoahAlwaysPreTouch) {
-    // Enabled pre-touch means the entire heap is committed right away.
-    init_byte_size = max_byte_size;
-  }
 
   Universe::check_alignment(max_byte_size,  reg_size_bytes, "Shenandoah heap");
   Universe::check_alignment(init_byte_size, reg_size_bytes, "Shenandoah heap");
@@ -280,9 +279,35 @@ jint ShenandoahHeap::initialize() {
                               "Cannot commit region memory");
   }
 
+  // Try to fit the collection set bitmap at lower addresses. This optimizes code generation for cset checks.
+  // Go up until a sensible limit (subject to encoding constraints) and try to reserve the space there.
+  // If not successful, bite a bullet and allocate at whatever address.
+  {
+    size_t cset_align = MAX2<size_t>(os::vm_page_size(), os::vm_allocation_granularity());
+    size_t cset_size = align_up(((size_t) sh_rs.base() + sh_rs.size()) >> ShenandoahHeapRegion::region_size_bytes_shift(), cset_align);
+
+    uintptr_t min = ShenandoahUtils::round_up_power_of_2(cset_align);
+    uintptr_t max = (1u << 30u);
+
+    for (uintptr_t addr = min; addr <= max; addr <<= 1u) {
+      char* req_addr = (char*)addr;
+      assert(is_aligned(req_addr, cset_align), "Should be aligned");
+      ReservedSpace cset_rs(cset_size, cset_align, false, req_addr);
+      if (cset_rs.is_reserved()) {
+        assert(cset_rs.base() == req_addr, "Allocated where requested: " PTR_FORMAT ", " PTR_FORMAT, p2i(cset_rs.base()), addr);
+        _collection_set = new ShenandoahCollectionSet(this, cset_rs, sh_rs.base());
+        break;
+      }
+    }
+
+    if (_collection_set == NULL) {
+      ReservedSpace cset_rs(cset_size, cset_align, false);
+      _collection_set = new ShenandoahCollectionSet(this, cset_rs, sh_rs.base());
+    }
+  }
+
   _regions = NEW_C_HEAP_ARRAY(ShenandoahHeapRegion*, _num_regions, mtGC);
   _free_set = new ShenandoahFreeSet(this, _num_regions);
-  _collection_set = new ShenandoahCollectionSet(this, sh_rs.base(), sh_rs.size());
 
   {
     ShenandoahHeapLocker locker(lock());
@@ -306,38 +331,32 @@ jint ShenandoahHeap::initialize() {
     _free_set->rebuild();
   }
 
-  if (ShenandoahAlwaysPreTouch) {
-    assert(!AlwaysPreTouch, "Should have been overridden");
-
+  if (AlwaysPreTouch) {
     // For NUMA, it is important to pre-touch the storage under bitmaps with worker threads,
     // before initialize() below zeroes it with initializing thread. For any given region,
     // we touch the region and the corresponding bitmaps from the same thread.
     ShenandoahPushWorkerScope scope(workers(), _max_workers, false);
 
-    size_t pretouch_heap_page_size = heap_page_size;
-    size_t pretouch_bitmap_page_size = bitmap_page_size;
+    _pretouch_heap_page_size = heap_page_size;
+    _pretouch_bitmap_page_size = bitmap_page_size;
 
 #ifdef LINUX
     // UseTransparentHugePages would madvise that backing memory can be coalesced into huge
     // pages. But, the kernel needs to know that every small page is used, in order to coalesce
     // them into huge one. Therefore, we need to pretouch with smaller pages.
     if (UseTransparentHugePages) {
-      pretouch_heap_page_size = (size_t)os::vm_page_size();
-      pretouch_bitmap_page_size = (size_t)os::vm_page_size();
+      _pretouch_heap_page_size = (size_t)os::vm_page_size();
+      _pretouch_bitmap_page_size = (size_t)os::vm_page_size();
     }
 #endif
 
     // OS memory managers may want to coalesce back-to-back pages. Make their jobs
     // simpler by pre-touching continuous spaces (heap and bitmap) separately.
 
-    log_info(gc, init)("Pretouch bitmap: " SIZE_FORMAT " regions, " SIZE_FORMAT " bytes page",
-                       _num_regions, pretouch_bitmap_page_size);
-    ShenandoahPretouchBitmapTask bcl(bitmap.base(), _bitmap_size, pretouch_bitmap_page_size);
+    ShenandoahPretouchBitmapTask bcl(bitmap.base(), _bitmap_size, _pretouch_bitmap_page_size);
     _workers->run_task(&bcl);
 
-    log_info(gc, init)("Pretouch heap: " SIZE_FORMAT " regions, " SIZE_FORMAT " bytes page",
-                       _num_regions, pretouch_heap_page_size);
-    ShenandoahPretouchHeapTask hcl(pretouch_heap_page_size);
+    ShenandoahPretouchHeapTask hcl(_pretouch_heap_page_size);
     _workers->run_task(&hcl);
   }
 
@@ -1280,11 +1299,16 @@ void ShenandoahHeap::object_iterate(ObjectClosure* cl) {
 
   Stack<oop,mtGC> oop_stack;
 
-  // First, we process GC roots according to current GC cycle. This populates the work stack with initial objects.
-  ShenandoahHeapIterationRootScanner rp;
   ObjectIterateScanRootClosure oops(&_aux_bit_map, &oop_stack);
 
-  rp.roots_do(&oops);
+  {
+    // First, we process GC roots according to current GC cycle.
+    // This populates the work stack with initial objects.
+    // It is important to relinquish the associated locks before diving
+    // into heap dumper.
+    ShenandoahHeapIterationRootScanner rp;
+    rp.roots_do(&oops);
+  }
 
   // Work through the oop stack to traverse heap.
   while (! oop_stack.is_empty()) {
@@ -2329,9 +2353,16 @@ bool ShenandoahHeap::commit_bitmap_slice(ShenandoahHeapRegion* r) {
   size_t slice = r->index() / _bitmap_regions_per_slice;
   size_t off = _bitmap_bytes_per_slice * slice;
   size_t len = _bitmap_bytes_per_slice;
-  if (!os::commit_memory((char*)_bitmap_region.start() + off, len, false)) {
+  char* start = (char*) _bitmap_region.start() + off;
+
+  if (!os::commit_memory(start, len, false)) {
     return false;
   }
+
+  if (AlwaysPreTouch) {
+    os::pretouch_memory(start, start + len, _pretouch_bitmap_page_size);
+  }
+
   return true;
 }
 
