@@ -982,11 +982,15 @@ bool IfNode::fold_compares_helper(ProjNode* proj, ProjNode* success, ProjNode* f
   }
 
   if (lo && hi) {
+    Node* hook = new Node(1);
+    hook->init_req(0, lo); // Add a use to lo to prevent him from dying
     // Merge the two compares into a single unsigned compare by building (CmpU (n - lo) (hi - lo))
     Node* adjusted_val = igvn->transform(new SubINode(n,  lo));
     if (adjusted_lim == NULL) {
       adjusted_lim = igvn->transform(new SubINode(hi, lo));
     }
+    hook->del_req(0); // Just yank bogus edge
+    hook->destruct();
     Node* newcmp = igvn->transform(new CmpUNode(adjusted_val, adjusted_lim));
     Node* newbool = igvn->transform(new BoolNode(newcmp, cond));
 
@@ -1505,7 +1509,8 @@ Node* IfNode::search_identical(int dist) {
   int op = Opcode();
   // Search up the dominator tree for an If with an identical test
   while (dom->Opcode() != op    ||  // Not same opcode?
-         dom->in(1) != in(1)    ||  // Not same input 1?
+         dom->in(1)    != in(1) ||  // Not same input 1?
+         (req() == 3 && dom->in(2) != in(2)) || // Not same input 2?
          prev_dom->in(0) != dom) {  // One path of test does not dominate?
     if (dist < 0) return NULL;
 

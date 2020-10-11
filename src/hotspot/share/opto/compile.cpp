@@ -1198,6 +1198,9 @@ void Compile::Init(int aliaslevel) {
   _range_check_casts = new(comp_arena()) GrowableArray<Node*>(comp_arena(), 8,  0, NULL);
   _opaque4_nodes = new(comp_arena()) GrowableArray<Node*>(comp_arena(), 8,  0, NULL);
   register_library_intrinsics();
+#ifdef ASSERT
+  _type_verify_symmetry = true;
+#endif
 }
 
 //---------------------------init_start----------------------------------------
@@ -2422,12 +2425,13 @@ void Compile::Optimize() {
     }
   }
 
-  print_method(PHASE_BEFORE_BARRIER_EXPAND, 2);
-
 #if INCLUDE_SHENANDOAHGC
-  if (UseShenandoahGC && ((ShenandoahBarrierSetC2*)BarrierSet::barrier_set()->barrier_set_c2())->expand_barriers(this, igvn)) {
-    assert(failing(), "must bail out w/ explicit message");
-    return;
+  if (UseShenandoahGC) {
+    print_method(PHASE_BEFORE_BARRIER_EXPAND, 2);
+    if (((ShenandoahBarrierSetC2*)BarrierSet::barrier_set()->barrier_set_c2())->expand_barriers(this, igvn)) {
+      assert(failing(), "must bail out w/ explicit message");
+      return;
+    }
   }
 #endif
 
@@ -3907,7 +3911,7 @@ void Compile::verify_graph_edges(bool no_dead_code) {
 // - G1 pre-barriers (see GraphKit::g1_write_barrier_pre())
 void Compile::verify_barriers() {
 #if INCLUDE_G1GC || INCLUDE_SHENANDOAHGC
-  if (UseG1GC || UseShenandoahGC) {
+  if (UseG1GC SHENANDOAHGC_ONLY(|| UseShenandoahGC)) {
     // Verify G1 pre-barriers
 
 #if INCLUDE_G1GC && INCLUDE_SHENANDOAHGC

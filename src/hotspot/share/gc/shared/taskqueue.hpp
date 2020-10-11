@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -111,9 +111,6 @@ protected:
   // Internal type for indexing the queue; also used for the tag.
   typedef NOT_LP64(uint16_t) LP64_ONLY(uint32_t) idx_t;
 
-  // The first free element after the last one pushed (mod N).
-  volatile uint _bottom;
-
   enum { MOD_N_MASK = N - 1 };
 
   class Age {
@@ -149,6 +146,10 @@ protected:
     };
   };
 
+  // The first free element after the last one pushed (mod N).
+  volatile uint _bottom;
+  // Add paddings to reduce false-sharing cache contention between _bottom and _age
+  DEFINE_PAD_MINUS_SIZE(0, DEFAULT_CACHE_LINE_SIZE, sizeof(uint));
   volatile Age _age;
 
   // These both operate mod N.
@@ -357,8 +358,10 @@ protected:
   static int randomParkAndMiller(int* seed0);
 public:
   // Returns "true" if some TaskQueue in the set contains a task.
-  virtual bool   peek() = 0;
+  virtual bool peek() = 0;
+#if INCLUDE_SHENANDOAHGC
   virtual size_t tasks() = 0;
+#endif
 };
 
 template <MEMFLAGS F> class TaskQueueSetSuperImpl: public CHeapObj<F>, public TaskQueueSetSuper {
@@ -390,7 +393,9 @@ public:
   bool steal(uint queue_num, int* seed, E& t);
 
   bool peek();
+#if INCLUDE_SHENANDOAHGC
   size_t tasks();
+#endif
 
   uint size() const { return _n; }
 };
@@ -416,6 +421,7 @@ bool GenericTaskQueueSet<T, F>::peek() {
   return false;
 }
 
+#if INCLUDE_SHENANDOAHGC
 template<class T, MEMFLAGS F>
 size_t GenericTaskQueueSet<T, F>::tasks() {
   size_t n = 0;
@@ -424,7 +430,7 @@ size_t GenericTaskQueueSet<T, F>::tasks() {
   }
   return n;
 }
-
+#endif
 
 // When to terminate from the termination protocol.
 class TerminatorTerminator: public CHeapObj<mtInternal> {
@@ -438,7 +444,10 @@ public:
 #undef TRACESPINNING
 
 class ParallelTaskTerminator: public StackObj {
+private:
+#if INCLUDE_SHENANDOAHGC
 protected:
+#endif
   uint _n_threads;
   TaskQueueSetSuper* _queue_set;
 
@@ -474,7 +483,7 @@ public:
   // As above, but it also terminates if the should_exit_termination()
   // method of the terminator parameter returns true. If terminator is
   // NULL, then it is ignored.
-  virtual bool offer_termination(TerminatorTerminator* terminator);
+  SHENANDOAHGC_ONLY(virtual) bool offer_termination(TerminatorTerminator* terminator);
 
   // Reset the terminator, so that it may be reused again.
   // The caller is responsible for ensuring that this is done

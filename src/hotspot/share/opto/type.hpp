@@ -166,6 +166,7 @@ private:
 #endif
 
   const Type *meet_helper(const Type *t, bool include_speculative) const;
+  void check_symmetrical(const Type *t, const Type *mt) const;
 
 protected:
   // Each class of type is also identified by its base.
@@ -1771,8 +1772,10 @@ inline bool Type::is_ptr_to_boxing_obj() const {
 // UseOptoBiasInlining
 #define XorXNode     XorLNode
 #define StoreXConditionalNode StoreLConditionalNode
+#if INCLUDE_SHENANDOAHGC
 #define LoadXNode    LoadLNode
 #define StoreXNode   StoreLNode
+#endif
 // Opcodes
 #define Op_LShiftX   Op_LShiftL
 #define Op_AndX      Op_AndL
@@ -1818,8 +1821,10 @@ inline bool Type::is_ptr_to_boxing_obj() const {
 // UseOptoBiasInlining
 #define XorXNode     XorINode
 #define StoreXConditionalNode StoreIConditionalNode
+#if INCLUDE_SHENANDOAHGC
 #define LoadXNode    LoadINode
 #define StoreXNode   StoreINode
+#endif
 // Opcodes
 #define Op_LShiftX   Op_LShiftI
 #define Op_AndX      Op_AndI

@@ -79,11 +79,11 @@ ArrayCopyNode* ArrayCopyNode::make(GraphKit* kit, bool may_throw,
   return ac;
 }
 
-void ArrayCopyNode::connect_outputs(GraphKit* kit) {
+void ArrayCopyNode::connect_outputs(GraphKit* kit, bool deoptimize_on_exception) {
   kit->set_all_memory_call(this, true);
   kit->set_control(kit->gvn().transform(new ProjNode(this,TypeFunc::Control)));
   kit->set_i_o(kit->gvn().transform(new ProjNode(this, TypeFunc::I_O)));
-  kit->make_slow_call_ex(this, kit->env()->Throwable_klass(), true);
+  kit->make_slow_call_ex(this, kit->env()->Throwable_klass(), true, deoptimize_on_exception);
   kit->set_all_memory_call(this);
 }
 
@@ -513,8 +513,8 @@ bool ArrayCopyNode::finish_transform(PhaseGVN *phase, bool can_reshape,
   } else {
     if (in(TypeFunc::Control) != ctl) {
       // we can't return new memory and control from Ideal at parse time
-      assert(!is_clonebasic() || UseShenandoahGC, "added control for clone?");
-      phase->record_for_igvn(this);
+      assert(!is_clonebasic() SHENANDOAHGC_ONLY(|| UseShenandoahGC), "added control for clone?");
+      SHENANDOAHGC_ONLY(phase->record_for_igvn(this);)
       return false;
     }
   }

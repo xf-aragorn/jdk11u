@@ -462,14 +462,16 @@ Node *PhaseMacroExpand::value_from_mem_phi(Node *mem, BasicType ft, const Type *
       if (val == mem) {
         values.at_put(j, mem);
       } else if (val->is_Store()) {
-        Node* n = val->in(MemNode::ValueIn);
 #if INCLUDE_SHENANDOAHGC
+        Node* n = val->in(MemNode::ValueIn);
         if (UseShenandoahGC) {
           BarrierSetC2* bs = BarrierSet::barrier_set()->barrier_set_c2();
           n = bs->step_over_gc_barrier(n);
         }
-#endif
         values.at_put(j, n);
+#else
+        values.at_put(j, val->in(MemNode::ValueIn));
+#endif
       } else if(val->is_Proj() && val->in(0) == alloc) {
         values.at_put(j, _igvn.zerocon(ft));
       } else if (val->is_Phi()) {
@@ -580,14 +582,16 @@ Node *PhaseMacroExpand::value_from_mem(Node *sfpt_mem, Node *sfpt_ctl, BasicType
       // hit a sentinel, return appropriate 0 value
       return _igvn.zerocon(ft);
     } else if (mem->is_Store()) {
-      Node* n = mem->in(MemNode::ValueIn);
 #if INCLUDE_SHENANDOAHGC
+      Node* n = mem->in(MemNode::ValueIn);
       if (UseShenandoahGC) {
         BarrierSetC2* bs = BarrierSet::barrier_set()->barrier_set_c2();
         n = bs->step_over_gc_barrier(n);
       }
-#endif
       return n;
+#else
+      return mem->in(MemNode::ValueIn);
+#endif
     } else if (mem->is_Phi()) {
       // attempt to produce a Phi reflecting the values on the input paths of the Phi
       Node_Stack value_phis(a, 8);
@@ -965,8 +969,8 @@ void PhaseMacroExpand::process_users_of_allocation(CallNode *alloc) {
             assert(ac->is_clonebasic(), "unexpected array copy kind");
             Node* membar_after = ac->proj_out(TypeFunc::Control)->unique_ctrl_out();
             disconnect_projections(ac, _igvn);
-            assert(alloc->in(0)->is_Proj() && alloc->in(0)->in(0)->Opcode() == Op_MemBarCPUOrder, "mem barrier expected before allocation");
-            Node* membar_before = alloc->in(0)->in(0);
+            assert(alloc->in(TypeFunc::Memory)->is_Proj() && alloc->in(TypeFunc::Memory)->in(0)->Opcode() == Op_MemBarCPUOrder, "mem barrier expected before allocation");
+            Node* membar_before = alloc->in(TypeFunc::Memory)->in(0);
             disconnect_projections(membar_before->as_MemBar(), _igvn);
             if (membar_after->is_MemBar()) {
               disconnect_projections(membar_after->as_MemBar(), _igvn);

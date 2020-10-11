@@ -980,24 +980,22 @@ void PhaseIterGVN::verify_step(Node* n) {
   if (VerifyIterativeGVN) {
     _verify_window[_verify_counter % _verify_window_size] = n;
     ++_verify_counter;
-    ResourceMark rm;
-    ResourceArea* area = Thread::current()->resource_area();
-    VectorSet old_space(area), new_space(area);
-    if (C->unique() < 1000 ||
-        0 == _verify_counter % (C->unique() < 10000 ? 10 : 100)) {
+    if (C->unique() < 1000 || 0 == _verify_counter % (C->unique() < 10000 ? 10 : 100)) {
       ++_verify_full_passes;
-      Node::verify_recur(C->root(), -1, old_space, new_space);
+      Node::verify(C->root(), -1);
     }
-    const int verify_depth = 4;
-    for ( int i = 0; i < _verify_window_size; i++ ) {
+    for (int i = 0; i < _verify_window_size; i++) {
       Node* n = _verify_window[i];
-      if ( n == NULL )  continue;
-      if( n->in(0) == NodeSentinel ) {  // xform_idom
+      if (n == NULL) {
+        continue;
+      }
+      if (n->in(0) == NodeSentinel) { // xform_idom
         _verify_window[i] = n->in(1);
-        --i; continue;
+        --i;
+        continue;
       }
       // Typical fanout is 1-2, so this call visits about 6 nodes.
-      Node::verify_recur(n, verify_depth, old_space, new_space);
+      Node::verify(n, 4);
     }
   }
 }
@@ -1083,7 +1081,7 @@ void PhaseIterGVN::verify_PhaseIterGVN() {
   C->verify_graph_edges();
   if( VerifyOpto && allow_progress() ) {
     // Must turn off allow_progress to enable assert and break recursion
-    C->root()->verify();
+    Node::verify(C->root(), -1);
     { // Check if any progress was missed using IterGVN
       // Def-Use info enables transformations not attempted in wash-pass
       // e.g. Region/Phi cleanup, ...
@@ -1384,7 +1382,7 @@ void PhaseIterGVN::remove_globally_dead_node( Node *dead ) {
                 assert(!(i < imax), "sanity");
               }
             } else {
-              BarrierSet::barrier_set()->barrier_set_c2()->enqueue_useful_gc_barrier(this, in);
+              BarrierSet::barrier_set()->barrier_set_c2()->enqueue_useful_gc_barrier(_worklist, in);
             }
             if (ReduceFieldZeroing && dead->is_Load() && i == MemNode::Memory &&
                 in->is_Proj() && in->in(0) != NULL && in->in(0)->is_Initialize()) {
@@ -1673,7 +1671,7 @@ void PhaseIterGVN::add_users_to_worklist( Node *n ) {
         }
       }
     }
-
+#if INCLUDE_SHENANDOAHGC
     // TODO: Needed after the block above?
     if (use->is_ShenandoahBarrier()) {
       Node* cmp = use->find_out_with(Op_CmpP);
@@ -1681,6 +1679,7 @@ void PhaseIterGVN::add_users_to_worklist( Node *n ) {
         _worklist.push(cmp);
       }
     }
+#endif
   }
 }
 
@@ -2112,10 +2111,12 @@ void Node::set_req_X( uint i, Node *n, PhaseIterGVN *igvn ) {
     default:
       break;
     }
+#if INCLUDE_SHENANDOAHGC
     if (UseShenandoahGC) {
       // TODO: Should we call this for ZGC as well?
-      BarrierSet::barrier_set()->barrier_set_c2()->enqueue_useful_gc_barrier(igvn, old);
+      BarrierSet::barrier_set()->barrier_set_c2()->enqueue_useful_gc_barrier(igvn->_worklist, old);
     }
+#endif
   }
 
 }

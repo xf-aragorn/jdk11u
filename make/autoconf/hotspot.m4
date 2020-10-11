@@ -352,13 +352,17 @@ AC_DEFUN_ONCE([HOTSPOT_SETUP_JVM_FEATURES],
     fi
   fi
 
-  # Only enable Shenandoah on supported arches
+  # Only enable Shenandoah on supported arches, and only if requested
   AC_MSG_CHECKING([if shenandoah can be built])
-  if test "x$OPENJDK_TARGET_CPU_ARCH" = "xx86" || test "x$OPENJDK_TARGET_CPU" = "xaarch64" ; then
-    AC_MSG_RESULT([yes])
+  if HOTSPOT_CHECK_JVM_FEATURE(shenandoahgc); then
+    if test "x$OPENJDK_TARGET_CPU_ARCH" = "xx86" || test "x$OPENJDK_TARGET_CPU" = "xaarch64" ; then
+      AC_MSG_RESULT([yes])
+    else
+      DISABLED_JVM_FEATURES="$DISABLED_JVM_FEATURES shenandoahgc"
+      AC_MSG_RESULT([no, platform not supported])
+    fi
   else
-    DISABLED_JVM_FEATURES="$DISABLED_JVM_FEATURES shenandoahgc"
-    AC_MSG_RESULT([no, platform not supported])
+      DISABLED_JVM_FEATURES="$DISABLED_JVM_FEATURES shenandoahgc"
   fi
 
   # Only enable ZGC on supported platforms
