@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,28 +21,28 @@
  * questions.
  */
 
-/* @test
-   @bug 4173717
-   @summary Make sure that passing 0 in setReceiveBufferSize will throw
-   IllegalArgumentException
-   */
-import java.net.*;
+/**
+ * @test
+ * @bug 8222072
+ * @summary Send CompiledMethodLoad events only to the environment requested it with GenerateEvents
+ * @compile GenerateEventsTest.java
+ * @run main/othervm/native -agentlib:GenerateEvents1 -agentlib:GenerateEvents2 MyPackage.GenerateEventsTest
+ */
 
-public class SetReceiveBufferSize {
+package MyPackage;
 
-  public static void main(String args[]) throws Exception {
-    boolean error = true;
-     DatagramSocket soc = null;
+public class GenerateEventsTest {
+  static native void agent1GenerateEvents();
+  static native void agent2SetThread(Thread thread);
+  static native boolean agent1FailStatus();
+  static native boolean agent2FailStatus();
 
-     try {
-       soc = new DatagramSocket();
-       soc.setReceiveBufferSize(0);
-     } catch(IllegalArgumentException e) {
-       error = false;
-     }
-
-     if (error) {
-       throw new RuntimeException("Test with 0 buffer size failed!");
-     }
+  public static void main(String[] args) {
+      agent2SetThread(Thread.currentThread());
+      agent1GenerateEvents(); // Re-generate CompiledMethodLoad events
+      if (agent1FailStatus()|| agent2FailStatus()) {
+         throw new RuntimeException("GenerateEventsTest failed!");
+      }
+      System.out.println("GenerateEventsTest passed!");
   }
 }
