@@ -101,10 +101,10 @@ public final class PKCS12KeyStore extends KeyStoreSpi {
             = "PBEWithHmacSHA256AndAES_256";
     private static final String DEFAULT_KEY_PBE_ALGORITHM
             = "PBEWithHmacSHA256AndAES_256";
-    private static final String DEFAULT_MAC_ALGORITHM = "HmacPBESHA256";
+    private static final String DEFAULT_MAC_ALGORITHM = "HmacPBESHA1";
     private static final int DEFAULT_CERT_PBE_ITERATION_COUNT = 10000;
     private static final int DEFAULT_KEY_PBE_ITERATION_COUNT = 10000;
-    private static final int DEFAULT_MAC_ITERATION_COUNT = 10000;
+    private static final int DEFAULT_MAC_ITERATION_COUNT = 100000;
 
     // Legacy settings. Used when "keystore.pkcs12.legacy" is set.
     private static final String LEGACY_CERT_PBE_ALGORITHM
@@ -787,11 +787,18 @@ public final class PKCS12KeyStore extends KeyStoreSpi {
      */
     private AlgorithmParameters getPBEAlgorithmParameters(
             String algorithm, int iterationCount) throws IOException {
-        AlgorithmParameters algParams = null;
+        AlgorithmParameters algParams;
+
+        byte[] salt = getSalt();
+        //if (KnownOIDs.findMatch(algorithm) == KnownOIDs.PBEWithMD5AndDES) {
+        if (algorithm.toUpperCase(Locale.ENGLISH).equals("PBEWITHMD5ANDDES") || algorithm.equals("1.2.840.113549.1.5.3")) {
+            // PBES1 scheme such as PBEWithMD5AndDES requires a 8-byte salt
+            salt = Arrays.copyOf(salt, 8);
+        }
 
         // create PBE parameters from salt and iteration count
         PBEParameterSpec paramSpec =
-                new PBEParameterSpec(getSalt(), iterationCount);
+                new PBEParameterSpec(salt, iterationCount);
         try {
            algParams = AlgorithmParameters.getInstance(algorithm);
            algParams.init(paramSpec);
