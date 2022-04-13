@@ -610,7 +610,11 @@ public abstract class Toolkit {
                 }
             });
             if (!GraphicsEnvironment.isHeadless()) {
-                loadAssistiveTechnologies();
+                try {
+                    loadAssistiveTechnologies();
+                } catch (AWTError error) {
+                    // ignore silently
+                }
             }
         }
         return toolkit;
