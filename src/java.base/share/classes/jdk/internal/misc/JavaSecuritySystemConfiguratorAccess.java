@@ -27,5 +27,4 @@ package jdk.internal.misc;
 
 public interface JavaSecuritySystemConfiguratorAccess {
     boolean isSystemFipsEnabled();
-    boolean isPlainKeySupportEnabled();
 }
