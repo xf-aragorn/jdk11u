@@ -41,6 +41,16 @@ $(eval $(call SetupBuildLauncher, java, \
     OPTIMIZATION := HIGH, \
 ))
 
+#Wno-error=cpp is present to allow commented warning in ifdef part of main.c
+$(eval $(call SetupBuildLauncher, alt-java, \
+    CFLAGS := -DEXPAND_CLASSPATH_WILDCARDS -DENABLE_ARG_FILES -DREDHAT_ALT_JAVA -Wno-error=cpp, \
+    LDFLAGS_solaris := -R$(OPENWIN_HOME)/lib$(OPENJDK_TARGET_CPU_ISADIR), \
+    LIBS_windows := user32.lib comctl32.lib, \
+    EXTRA_RC_FLAGS := $(JAVA_RC_FLAGS), \
+    VERSION_INFO_RESOURCE := $(JAVA_VERSION_INFO_RESOURCE), \
+    OPTIMIZATION := HIGH, \
+))
+
 ifeq ($(OPENJDK_TARGET_OS), windows)
   $(eval $(call SetupBuildLauncher, javaw, \
       CFLAGS := -DJAVAW -DEXPAND_CLASSPATH_WILDCARDS -DENABLE_ARG_FILES, \
