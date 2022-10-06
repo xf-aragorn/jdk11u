@@ -17,3 +17,10 @@
 /src/java.base/windows/native/launcher/icons
 /src/java.desktop/share/classes/javax/swing/plaf/basic/icons/JavaCup16.png
 /src/java.desktop/windows/classes/com/sun/java/swing/plaf/windows/icons/JavaCup32.png
+/build/
+/make.bak2/
+/make.jdk17/
+/make.bak/
+/.idea/
+/CMakeLists.txt
+src/java.base/windows/conf/net.properties
